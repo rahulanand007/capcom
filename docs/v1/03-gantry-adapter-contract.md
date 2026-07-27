@@ -187,6 +187,11 @@ Body:
 }
 ```
 
+Before replacing access, the adapter must read the current Gantry access
+document and preserve its complete `sources` object. Capcom changes only the
+normalized capability `selections`; omitting `sources` would make Gantry reject
+the full-document replacement and could otherwise discard existing bindings.
+
 ### Disable/Enable Agent
 
 Use:

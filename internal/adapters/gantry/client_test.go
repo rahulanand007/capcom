@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,104 @@ func TestGetAgentAccess(t *testing.T) {
 	}
 	if got.Raw["agentId"] != "agent:main" {
 		t.Fatalf("raw payload not preserved: %#v", got.Raw)
+	}
+}
+
+func TestReplaceAgentAccessPreservesSources(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agents/agent:main/access" {
+			t.Fatalf("path = %q, want /v1/agents/agent:main/access", r.URL.Path)
+		}
+		methods = append(methods, r.Method)
+		switch r.Method {
+		case http.MethodGet:
+			writeTestJSON(t, w, map[string]any{
+				"agentId": "agent:main",
+				"sources": map[string]any{
+					"skills":     []map[string]any{{"id": "skill:research"}},
+					"mcpServers": []map[string]any{},
+					"tools":      []map[string]any{{"id": "tool:browser"}},
+				},
+				"selections": []map[string]any{{"id": "browser.use", "version": "builtin"}},
+			})
+		case http.MethodPut:
+			var body struct {
+				Sources struct {
+					Skills     []map[string]any `json:"skills"`
+					MCPServers []map[string]any `json:"mcpServers"`
+					Tools      []map[string]any `json:"tools"`
+				} `json:"sources"`
+				Selections []gantrySelection `json:"selections"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			if len(body.Sources.Skills) != 1 || body.Sources.Skills[0]["id"] != "skill:research" {
+				t.Fatalf("skill sources = %#v", body.Sources.Skills)
+			}
+			if len(body.Sources.Tools) != 1 || body.Sources.Tools[0]["id"] != "tool:browser" {
+				t.Fatalf("tool sources = %#v", body.Sources.Tools)
+			}
+			if len(body.Selections) != 1 || body.Selections[0].ID != "filesystem.read" || body.Selections[0].Version != "catalog" {
+				t.Fatalf("selections = %#v", body.Selections)
+			}
+			writeTestJSON(t, w, map[string]any{
+				"agentId":    "agent:main",
+				"sources":    body.Sources,
+				"selections": body.Selections,
+			})
+		default:
+			t.Fatalf("method = %q", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	got, err := NewClient(server.Client(), staticCredentialResolver{"gantry-key": "test-token"}).ReplaceAgentAccess(
+		context.Background(),
+		domain.RuntimeConnection{
+			BaseURL: server.URL,
+			AuthRef: "gantry-key",
+			Mode:    domain.RuntimeModeControlEnabled,
+		},
+		"agent:main",
+		domain.AccessDocument{Selections: []domain.AccessSelection{{
+			ID:         "filesystem.read",
+			Attributes: map[string]any{"version": "catalog"},
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("ReplaceAgentAccess returned error: %v", err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
+		t.Fatalf("methods = %#v, want GET then PUT", methods)
+	}
+	if len(got.Selections) != 1 || got.Selections[0].ID != "filesystem.read" {
+		t.Fatalf("selections = %#v", got.Selections)
+	}
+}
+
+func TestReplaceAgentAccessRejectsMissingSources(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"agentId":    "agent:main",
+			"selections": []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.Client(), staticCredentialResolver{"gantry-key": "test-token"}).ReplaceAgentAccess(
+		context.Background(),
+		domain.RuntimeConnection{
+			BaseURL: server.URL,
+			AuthRef: "gantry-key",
+			Mode:    domain.RuntimeModeControlEnabled,
+		},
+		"agent:main",
+		domain.AccessDocument{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not contain sources") {
+		t.Fatalf("error = %v, want missing sources error", err)
 	}
 }
 
