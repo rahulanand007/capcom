@@ -18,6 +18,8 @@ type Adapter interface {
 	GetAgentAccess(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string) (*domain.AccessDocument, error)
 	ReplaceAgentAccess(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string, access domain.AccessDocument) (*domain.AccessDocument, error)
 	SetAgentStatus(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string, status domain.AgentStatus) (*domain.AgentSnapshot, error)
+	DeleteAgent(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string) error
+	CancelExecution(ctx context.Context, conn domain.RuntimeConnection, execution domain.RuntimeExecutionSnapshot) error
 	CollectSnapshot(ctx context.Context, conn domain.RuntimeConnection) (*domain.RuntimeSnapshot, error)
 }
 
@@ -42,4 +44,6 @@ type Capabilities struct {
 	ReadInventory          bool `json:"read_inventory"`
 	ReadCapabilityCatalog  bool `json:"read_capability_catalog"`
 	SetAgentStatus         bool `json:"set_agent_status"`
+	DeleteAgent            bool `json:"delete_agent"`
+	CancelExecution        bool `json:"cancel_execution"`
 }

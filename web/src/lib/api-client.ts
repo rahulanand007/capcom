@@ -2,7 +2,9 @@ import type {
   AgentDelegation,
   CreateRuntimeInstanceRequest,
   CreateSecretRequest,
+  CancelExecutionRequest,
   ControlAction,
+  DeleteAgentRequest,
   HealthResponse,
   PersistedAgent,
   ReconcileAccessRequest,
@@ -165,6 +167,16 @@ export const capcomApi = {
     }),
   setAgentStatus: (id: string, body: SetAgentStatusRequest) =>
     request<ControlAction>(`/v1/agents/${id}/actions/set-status`, {
+      method: "POST",
+      body,
+    }),
+  deleteAgent: (id: string, body: DeleteAgentRequest) =>
+    request<ControlAction>(`/v1/agents/${id}/actions/delete`, {
+      method: "POST",
+      body,
+    }),
+  cancelExecution: (id: string, body: CancelExecutionRequest) =>
+    request<ControlAction>(`/v1/runtime-executions/${id}/actions/cancel`, {
       method: "POST",
       body,
     }),

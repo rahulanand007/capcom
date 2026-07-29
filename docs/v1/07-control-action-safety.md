@@ -12,6 +12,8 @@ Allow operators to take safe, explicit, audited runtime actions without making C
 | enable_agent | Gantry `PATCH /v1/agents/{agentId}` status active |
 | replace_access | Gantry `PUT /v1/agents/{agentId}/access` |
 | restrict_capability | Read access, remove one selection, PUT access |
+| delete_agent | LangGraph `DELETE /assistants/{assistantId}` |
+| cancel_execution | LangGraph interrupt cancellation with `wait=true` |
 
 ## Required Fields
 
@@ -23,8 +25,14 @@ Every control action requires:
 - `targetId`
 - `actionType`
 - `parameters`
+- `idempotency_key`
 
 Reject vague reasons shorter than 10 characters.
+
+Agent deletion additionally requires an exact runtime-agent-ID confirmation.
+Execution cancellation is limited to `pending` or `running` runs and uses
+interrupt semantics so records and checkpoints remain available. Rollback
+cancellation is outside V1.
 
 ## Safety Checks
 
@@ -96,4 +104,3 @@ Confirmation should show:
 - current runtime
 - capability/source being removed
 - reason input
-

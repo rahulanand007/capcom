@@ -10,6 +10,7 @@ import {
 import { capcomApi } from "@/lib/api-client"
 import type {
   AgentDelegation,
+  CancelExecutionRequest,
   CreateRuntimeInstanceRequest,
   CreateSecretRequest,
   HealthResponse,
@@ -28,6 +29,7 @@ import type {
   SubagentExecution,
   SyncRuntimeRequest,
   ControlAction,
+  DeleteAgentRequest,
 } from "@/lib/api-types"
 
 export const queryKeys = {
@@ -210,6 +212,37 @@ export function useSetAgentStatusMutation(id: string) {
           queryKey: queryKeys.runtimeInstanceAgents(action.runtime_connection_id),
         }),
       ])
+    },
+  })
+}
+
+export function useDeleteAgentMutation(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation<ControlAction, Error, DeleteAgentRequest>({
+    mutationFn: (body) => capcomApi.deleteAgent(id, body),
+    onSuccess: async (action) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.persistedAgent(id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.persistedAgents() }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.runtimeInstanceAgents(action.runtime_connection_id),
+        }),
+      ])
+    },
+  })
+}
+
+export function useCancelExecutionMutation(
+  executionId: string,
+  runtimeConnectionId: string
+) {
+  const queryClient = useQueryClient()
+  return useMutation<ControlAction, Error, CancelExecutionRequest>({
+    mutationFn: (body) => capcomApi.cancelExecution(executionId, body),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.runtimeInstanceExecutions(runtimeConnectionId),
+      })
     },
   })
 }

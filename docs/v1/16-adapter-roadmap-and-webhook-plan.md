@@ -112,7 +112,7 @@ connections are telemetry connectors rather than authoritative runtime adapters.
 
 ### 1. LangGraph Agent Server
 
-**Decision: selected and implemented as a read-only adapter on 2026-07-21.**
+**Decision: selected and implemented as a read/control adapter.**
 
 Build this next after the Gantry hardening slice. Agent Server has a documented
 HTTP API for assistants, threads, runs, cron jobs, store, A2A, MCP, and system
@@ -127,10 +127,11 @@ Initial support level:
 - executions: threads, runs, and run status
 - health: system endpoints
 - tools: MCP metadata where available
-- control: invoke/cancel only after audited action semantics are defined
+- control: assistant deletion and active-run interruption are implemented;
+  invocation remains deferred
 - access governance: report unsupported unless the deployment exposes a stable equivalent
 
-The completed first implementation slice is read-only:
+The completed implementation includes inventory and selected controls:
 
 1. Add a `langgraph` runtime kind and adapter registration.
 2. Support standalone/self-hosted Agent Server base URLs and `X-Api-Key`
@@ -144,8 +145,9 @@ The completed first implementation slice is read-only:
 7. Add recorded JSON fixtures, normalization tests, auth/error tests, and an
    optional live Agent Server contract test.
 
-Invocation, cancellation, cron mutation, and any deployment lifecycle controls
-remain a later audited control slice.
+Assistant deletion and run cancellation use the common audited control-action
+service. Invocation, cron mutation, thread deletion, rollback cancellation, and
+deployment lifecycle controls remain deferred.
 
 The implemented contract and local verification runbook are in
 `17-langgraph-agent-server-adapter.md`.

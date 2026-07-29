@@ -536,6 +536,25 @@ JOIN runtime_skills s ON s.id=ab.runtime_skill_id WHERE ab.agent_id=$1 ORDER BY 
 	return detail, nil
 }
 
+func (r SyncRepository) MarkAgentDeleted(ctx context.Context, agentID string) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE agents SET status='disabled',
+metadata_json=COALESCE(metadata_json,'{}'::jsonb) || jsonb_build_object(
+  'runtime_deleted', true,
+  'runtime_deleted_at', CURRENT_TIMESTAMP
+), updated_at=CURRENT_TIMESTAMP WHERE id=$1::uuid`, agentID)
+	if err != nil {
+		return fmt.Errorf("mark persisted agent deleted: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read marked agent count: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r SyncRepository) ListAgentDelegations(ctx context.Context, runtimeID, runtimeAgentID string) ([]domain.PersistedAgentDelegation, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,runtime_connection_id,orchestrator_runtime_agent_id,
 delegate_runtime_agent_id,delegate_ref,tool_name,display_name,persona,configured,resolved,revision,status,
@@ -631,4 +650,29 @@ AND ($3='' OR kind=$3) ORDER BY observed_at DESC LIMIT $4`, runtimeID, agentID, 
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r SyncRepository) GetRuntimeExecution(ctx context.Context, executionID string) (domain.PersistedRuntimeExecution, error) {
+	var item domain.PersistedRuntimeExecution
+	var started, ended sql.NullTime
+	var metadata, raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT id,runtime_connection_id,runtime_execution_id,
+COALESCE(parent_runtime_execution_id,''),runtime_agent_id,kind,status,started_at,ended_at,observed_at,
+metadata_json,raw_runtime_json FROM runtime_executions WHERE id=$1::uuid`, executionID).Scan(
+		&item.ID, &item.RuntimeConnectionID, &item.RuntimeExecutionID,
+		&item.ParentRuntimeExecutionID, &item.RuntimeAgentID, &item.Kind, &item.Status, &started,
+		&ended, &item.ObservedAt, &metadata, &raw,
+	)
+	if err != nil {
+		return domain.PersistedRuntimeExecution{}, fmt.Errorf("get runtime execution: %w", err)
+	}
+	if started.Valid {
+		item.StartedAt = &started.Time
+	}
+	if ended.Valid {
+		item.EndedAt = &ended.Time
+	}
+	_ = json.Unmarshal(metadata, &item.Metadata)
+	_ = json.Unmarshal(raw, &item.Raw)
+	return item, nil
 }

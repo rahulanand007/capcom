@@ -175,6 +175,14 @@ func (a *recordingAdapter) SetAgentStatus(_ context.Context, conn domain.Runtime
 	a.connection = conn
 	return &domain.AgentSnapshot{}, nil
 }
+func (a *recordingAdapter) DeleteAgent(_ context.Context, conn domain.RuntimeConnection, _ string) error {
+	a.connection = conn
+	return nil
+}
+func (a *recordingAdapter) CancelExecution(_ context.Context, conn domain.RuntimeConnection, _ domain.RuntimeExecutionSnapshot) error {
+	a.connection = conn
+	return nil
+}
 func (a *recordingAdapter) CollectSnapshot(_ context.Context, conn domain.RuntimeConnection) (*domain.RuntimeSnapshot, error) {
 	a.connection = conn
 	return &domain.RuntimeSnapshot{}, nil
@@ -212,6 +220,10 @@ func (fakeAdapter) ReplaceAgentAccess(context.Context, domain.RuntimeConnection,
 
 func (fakeAdapter) SetAgentStatus(context.Context, domain.RuntimeConnection, string, domain.AgentStatus) (*domain.AgentSnapshot, error) {
 	return &domain.AgentSnapshot{}, nil
+}
+func (fakeAdapter) DeleteAgent(context.Context, domain.RuntimeConnection, string) error { return nil }
+func (fakeAdapter) CancelExecution(context.Context, domain.RuntimeConnection, domain.RuntimeExecutionSnapshot) error {
+	return nil
 }
 
 func (fakeAdapter) CollectSnapshot(context.Context, domain.RuntimeConnection) (*domain.RuntimeSnapshot, error) {

@@ -601,6 +601,31 @@ paths:
                 $ref: "#/components/schemas/ControlAction"
         "400":
           $ref: "#/components/responses/Error"
+  /v1/agents/{id}/actions/delete:
+    post:
+      summary: Validate or delete a runtime agent
+      operationId: deleteAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteAgentRequest"
+      responses:
+        "200":
+          description: Audited control action result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlAction"
+        "400":
+          $ref: "#/components/responses/Error"
   /v1/subagent-executions:
     get:
       summary: List observed ephemeral subagent executions
@@ -655,6 +680,31 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/RuntimeExecution"
+  /v1/runtime-executions/{id}/actions/cancel:
+    post:
+      summary: Validate or cancel an active runtime execution
+      operationId: cancelRuntimeExecution
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelExecutionRequest"
+      responses:
+        "200":
+          description: Audited control action result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlAction"
+        "400":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -828,6 +878,10 @@ components:
         read_capability_catalog:
           type: boolean
         set_agent_status:
+          type: boolean
+        delete_agent:
+          type: boolean
+        cancel_execution:
           type: boolean
     RuntimeAgent:
       type: object
@@ -1164,6 +1218,23 @@ components:
         status:
           type: string
           enum: [enabled, disabled]
+        actor: { type: string }
+        reason: { type: string }
+        idempotency_key: { type: string }
+        dry_run: { type: boolean, default: false }
+    DeleteAgentRequest:
+      type: object
+      required: [confirmation, actor, reason, idempotency_key]
+      properties:
+        confirmation: { type: string }
+        actor: { type: string }
+        reason: { type: string }
+        idempotency_key: { type: string }
+        dry_run: { type: boolean, default: false }
+    CancelExecutionRequest:
+      type: object
+      required: [actor, reason, idempotency_key]
+      properties:
         actor: { type: string }
         reason: { type: string }
         idempotency_key: { type: string }

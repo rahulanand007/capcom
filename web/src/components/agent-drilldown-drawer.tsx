@@ -28,6 +28,7 @@ import {
   useAgentAccessQuery,
   useAgentDelegationsQuery,
   useAgentSkillsQuery,
+  useDeleteAgentMutation,
   usePersistedAgentQuery,
   useReconcileAgentAccessMutation,
   useSetAgentStatusMutation,
@@ -146,6 +147,15 @@ export function AgentDrilldownDrawer({
                 pendingAccess={accessQuery.isLoading}
               />
             ) : null}
+          </div>
+        ) : null}
+        {detail && instance?.runtime_type === "langgraph" ? (
+          <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--sl)] px-6 py-4">
+            <DeleteAssistantEditor
+              agent={detail}
+              enabled={canControl && !Boolean(detail.metadata?.runtime_deleted)}
+              onDeleted={() => onOpenChange(false)}
+            />
           </div>
         ) : null}
       </SheetContent>
@@ -606,6 +616,103 @@ function AgentStatusEditor({
             <DialogFooter>
               <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Submitting" : command}</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function DeleteAssistantEditor({
+  agent,
+  enabled,
+  onDeleted,
+}: {
+  agent: PersistedAgent
+  enabled: boolean
+  onDeleted: () => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const mutation = useDeleteAgentMutation(agent.id)
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        disabled={!enabled}
+        title={enabled ? "Delete assistant" : "Runtime instance is read-only"}
+        className="font-hud text-xs hover:border-[var(--dg)] hover:text-[var(--dg)]"
+        onClick={() => setOpen(true)}
+      >
+        Delete assistant
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="border border-[var(--hl)] bg-[var(--el)] shadow-[var(--shdw)] sm:max-w-[480px]">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const formData = new FormData(event.currentTarget)
+              const actor = String(formData.get("actor") ?? "").trim()
+              const reason = String(formData.get("reason") ?? "").trim()
+              const confirmation = String(formData.get("confirmation") ?? "").trim()
+              if (!actor || !reason || confirmation !== agent.runtime_agent_id) return
+              const dryRun = formData.get("dry_run") === "on"
+              mutation.mutate(
+                {
+                  actor,
+                  reason,
+                  confirmation,
+                  idempotency_key: randomIdempotencyKey(),
+                  dry_run: dryRun,
+                },
+                {
+                  onSuccess: (action) => {
+                    toast.success(
+                      `Delete assistant ${actionStatus(action)}${dryRun ? " (validation only)" : ""}`
+                    )
+                    setOpen(false)
+                    if (!dryRun) onDeleted()
+                  },
+                  onError: (error) => toast.error(error.message),
+                }
+              )
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Delete {agent.name}</DialogTitle>
+              <DialogDescription>
+                This removes the assistant and every one of its versions from LangGraph.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Actor</span>
+              <Input name="actor" defaultValue="local-operator" required className="font-hud text-[13px]" />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Reason</span>
+              <Textarea name="reason" defaultValue={`Delete ${agent.name}`} required rows={3} className="resize-none font-hud text-[13px]" />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Runtime agent ID</span>
+              <Input
+                name="confirmation"
+                placeholder={agent.runtime_agent_id}
+                required
+                autoComplete="off"
+                className="font-hud text-[13px]"
+              />
+            </label>
+            <label className="flex items-center gap-2 font-hud text-[12px] text-[var(--mu)]">
+              <input name="dry_run" type="checkbox" defaultChecked className="accent-[var(--ac)]" />
+              Validate only
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="submit" variant="destructive" disabled={mutation.isPending}>
+                {mutation.isPending ? "Submitting" : "Delete assistant"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>

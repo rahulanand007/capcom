@@ -21,8 +21,10 @@ type RuntimeSyncRepository interface {
 	GetRun(ctx context.Context, runtimeID, runID string) (domain.RuntimeSyncRun, error)
 	ListPersistedAgents(ctx context.Context, runtimeID string) ([]domain.PersistedAgent, error)
 	GetPersistedAgent(ctx context.Context, agentID string) (domain.PersistedAgentDetail, error)
+	MarkAgentDeleted(ctx context.Context, agentID string) error
 	ListSubagentExecutions(ctx context.Context, runtimeID, agentID string) ([]domain.PersistedSubagentExecution, error)
 	ListRuntimeExecutions(ctx context.Context, runtimeID, agentID, kind string, limit int) ([]domain.PersistedRuntimeExecution, error)
+	GetRuntimeExecution(ctx context.Context, executionID string) (domain.PersistedRuntimeExecution, error)
 	ListRuntimeDiagnostics(ctx context.Context, runtimeID string) ([]domain.PersistedRuntimeDiagnostic, error)
 	ListRuntimeInventory(ctx context.Context, runtimeID, kind string) ([]domain.PersistedRuntimeInventory, error)
 	ListRuntimeCapabilities(ctx context.Context, runtimeID string) ([]domain.PersistedRuntimeCapability, error)

@@ -34,6 +34,25 @@ func TestCheckUsesAPIKeyAndReturnsCapabilities(t *testing.T) {
 	if got.Capabilities.ReadAgentAccess || got.Capabilities.ReplaceAgentAccess {
 		t.Fatalf("unsupported capabilities reported: %#v", got.Capabilities)
 	}
+	if got.Capabilities.DeleteAgent || got.Capabilities.CancelExecution {
+		t.Fatalf("read-only connection reported controls: %#v", got.Capabilities)
+	}
+}
+
+func TestCheckReportsControlCapabilitiesForControlEnabledConnection(t *testing.T) {
+	server := newFixtureServer(t)
+	defer server.Close()
+
+	got, err := NewClient(server.Client(), staticCredentialResolver{"langgraph-key": "test-key"}).Check(
+		context.Background(),
+		domain.RuntimeConnection{BaseURL: server.URL, AuthRef: "langgraph-key", Mode: domain.RuntimeModeControlEnabled},
+	)
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if !got.Capabilities.DeleteAgent || !got.Capabilities.CancelExecution {
+		t.Fatalf("missing control capabilities: %#v", got.Capabilities)
+	}
 }
 
 func TestCollectSnapshotNormalizesAssistantsThreadsAndRuns(t *testing.T) {
@@ -69,6 +88,55 @@ func TestReplaceAgentAccessIsUnsupported(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "does not expose access replacement") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDeleteAgentCallsAssistantEndpoint(t *testing.T) {
+	var method, path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	err := NewClient(server.Client(), staticCredentialResolver{"key": "test-key"}).DeleteAgent(
+		context.Background(),
+		domain.RuntimeConnection{BaseURL: server.URL, AuthRef: "key"},
+		"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+	)
+	if err != nil {
+		t.Fatalf("DeleteAgent returned error: %v", err)
+	}
+	if method != http.MethodDelete || path != "/assistants/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
+func TestCancelExecutionInterruptsRunAndWaits(t *testing.T) {
+	var method, path, query string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query = r.Method, r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	err := NewClient(server.Client(), staticCredentialResolver{"key": "test-key"}).CancelExecution(
+		context.Background(),
+		domain.RuntimeConnection{BaseURL: server.URL, AuthRef: "key"},
+		domain.RuntimeExecutionSnapshot{
+			RuntimeExecutionID:       "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+			ParentRuntimeExecutionID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			Kind:                     "run",
+		},
+	)
+	if err != nil {
+		t.Fatalf("CancelExecution returned error: %v", err)
+	}
+	if method != http.MethodPost ||
+		path != "/threads/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/runs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/cancel" ||
+		query != "action=interrupt&wait=true" {
+		t.Fatalf("request = %s %s?%s", method, path, query)
 	}
 }
 

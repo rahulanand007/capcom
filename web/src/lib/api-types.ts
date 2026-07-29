@@ -33,6 +33,8 @@ export type RuntimeCapabilities = {
   read_inventory?: boolean
   read_capability_catalog?: boolean
   set_agent_status?: boolean
+  delete_agent?: boolean
+  cancel_execution?: boolean
 }
 
 export type RuntimeInstance = {
@@ -241,6 +243,21 @@ export type RuntimeCapability = {
 
 export type SetAgentStatusRequest = {
   status: "enabled" | "disabled"
+  actor: string
+  reason: string
+  idempotency_key: string
+  dry_run?: boolean
+}
+
+export type DeleteAgentRequest = {
+  confirmation: string
+  actor: string
+  reason: string
+  idempotency_key: string
+  dry_run?: boolean
+}
+
+export type CancelExecutionRequest = {
   actor: string
   reason: string
   idempotency_key: string

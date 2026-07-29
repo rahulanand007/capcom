@@ -622,6 +622,14 @@ func (c Client) SetAgentStatus(ctx context.Context, conn domain.RuntimeConnectio
 	}, nil
 }
 
+func (c Client) DeleteAgent(context.Context, domain.RuntimeConnection, string) error {
+	return fmt.Errorf("gantry agent deletion is not supported")
+}
+
+func (c Client) CancelExecution(context.Context, domain.RuntimeConnection, domain.RuntimeExecutionSnapshot) error {
+	return fmt.Errorf("gantry execution cancellation is not supported")
+}
+
 func normalizeDoctor(doctor gantryDoctor, observedAt time.Time) ([]domain.RuntimeDiagnosticSnapshot, domain.RuntimeStatus) {
 	status := domain.RuntimeStatusActive
 	diagnostics := make([]domain.RuntimeDiagnosticSnapshot, 0, len(doctor.Checks))

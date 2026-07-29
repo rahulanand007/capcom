@@ -208,10 +208,20 @@ Query parameters:
 ## Control Actions
 
 ```text
+POST /v1/agents/{id}/actions/reconcile-access
+POST /v1/agents/{id}/actions/set-status
+POST /v1/agents/{id}/actions/delete
+POST /v1/runtime-executions/{id}/actions/cancel
 POST /v1/control-actions
 GET /v1/control-actions
 GET /v1/control-actions/{id}
 ```
+
+The targeted action routes are the implemented V1 surface. Every request
+requires `actor`, `reason`, `idempotency_key`, and optional `dry_run`.
+Agent deletion also requires `confirmation` equal to the runtime agent ID.
+Execution cancellation accepts only persisted active run IDs and uses
+non-destructive interrupt semantics.
 
 Request:
 
@@ -235,6 +245,8 @@ disable_agent
 enable_agent
 replace_access
 restrict_capability
+delete_agent
+cancel_execution
 ```
 
 Response:

@@ -29,6 +29,8 @@ type RouterConfig struct {
 type ControlActionService interface {
 	ReconcileAccess(ctx context.Context, input services.ReconcileAccessInput) (domain.ControlAction, error)
 	SetAgentStatus(ctx context.Context, input services.SetAgentStatusInput) (domain.ControlAction, error)
+	DeleteAgent(ctx context.Context, input services.DeleteAgentInput) (domain.ControlAction, error)
+	CancelExecution(ctx context.Context, input services.CancelExecutionInput) (domain.ControlAction, error)
 }
 
 type RuntimeSyncService interface {
@@ -118,6 +120,8 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/live/agents/{agentID}/access", handleGetRuntimeAgentAccess(cfg))
 	mux.HandleFunc("POST /v1/agents/{id}/actions/reconcile-access", handleReconcileAgentAccess(cfg))
 	mux.HandleFunc("POST /v1/agents/{id}/actions/set-status", handleSetAgentStatus(cfg))
+	mux.HandleFunc("POST /v1/agents/{id}/actions/delete", handleDeleteAgent(cfg))
+	mux.HandleFunc("POST /v1/runtime-executions/{id}/actions/cancel", handleCancelExecution(cfg))
 	mux.HandleFunc("/", handleNotFound)
 
 	return requestLogger(corsMiddleware(adminAuth(mux, cfg.AdminToken), cfg.AllowedOrigins), logger)
