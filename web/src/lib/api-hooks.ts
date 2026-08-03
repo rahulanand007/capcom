@@ -126,6 +126,14 @@ export function useRuntimeInstanceAgentsQuery(id: string | undefined) {
   })
 }
 
+export function useRuntimeInstanceAgentDelegationsQuery(id: string | undefined) {
+  return useQuery<AgentDelegation[]>({
+    queryKey: queryKeys.runtimeInstanceAgentDelegations(id ?? ""),
+    queryFn: () => capcomApi.listRuntimeInstanceAgentDelegations(id ?? ""),
+    enabled: Boolean(id),
+  })
+}
+
 export function useRuntimeInstanceExecutionsQuery(id: string | undefined) {
   return useQuery<RuntimeExecution[]>({
     queryKey: queryKeys.runtimeInstanceExecutions(id ?? ""),

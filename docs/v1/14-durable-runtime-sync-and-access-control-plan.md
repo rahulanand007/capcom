@@ -382,7 +382,9 @@ Switch the normal table and detail drawer to persisted fleet endpoints. Show:
 The fleet list is a topology projection over persisted agents and durable
 `agent_delegations`; it does not rewrite many-to-many delegation edges into
 `parent_runtime_agent_id`. Build and render the projection independently for
-each runtime instance using this deterministic order:
+each runtime instance. The fleet-wide Agents page and every adapter instance
+table must use the same projection and labels so hierarchy does not change when
+an operator moves between views. Use this deterministic order:
 
 1. main agents, ordered by name
 2. agents reachable from those mains, breadth-first and ordered by name
