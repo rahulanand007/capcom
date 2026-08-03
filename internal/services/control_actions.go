@@ -286,6 +286,11 @@ func (s ControlActionService) DeleteAgent(ctx context.Context, input DeleteAgent
 		rejectErr := s.rejectControlAction(ctx, action, "agent", input.AgentID, before, after, message, "confirmation_mismatch")
 		return actionFromError(rejectErr, action), rejectErr
 	}
+	if conn.Kind == domain.RuntimeKindLangGraph && isLangGraphSystemManaged(detail.Agent.Metadata) {
+		message := "LangGraph system-managed assistants are recreated from graph configuration and cannot be deleted through Capcom"
+		rejectErr := s.rejectControlAction(ctx, action, "agent", input.AgentID, before, after, message, "system_managed_agent")
+		return actionFromError(rejectErr, action), rejectErr
+	}
 	adapter, err := s.validateCapability(ctx, conn, action, before, after, "agent", input.AgentID, func(capabilities runtimeadapter.Capabilities) bool {
 		return capabilities.DeleteAgent
 	}, "runtime adapter does not support agent deletion")
@@ -324,6 +329,15 @@ func (s ControlActionService) DeleteAgent(ctx context.Context, input DeleteAgent
 	s.runVerificationSync(ctx, conn.ID, input.Actor, "verify agent deletion: "+input.Reason, result)
 	s.auditControlAction(ctx, action, "control_action.succeeded", "succeeded", "agent", input.AgentID, before, after, result)
 	return action, nil
+}
+
+func isLangGraphSystemManaged(metadata map[string]any) bool {
+	assistantMetadata, ok := metadata["assistant_metadata"].(map[string]any)
+	if !ok {
+		return false
+	}
+	createdBy, _ := assistantMetadata["created_by"].(string)
+	return strings.EqualFold(strings.TrimSpace(createdBy), "system")
 }
 
 func (s ControlActionService) CancelExecution(ctx context.Context, input CancelExecutionInput) (domain.ControlAction, error) {

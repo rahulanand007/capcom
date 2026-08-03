@@ -50,6 +50,108 @@ func TestRuntimeConnectionServiceCreate(t *testing.T) {
 	}
 }
 
+func TestRuntimeConnectionServiceCreateAllowsLangGraphControlMode(t *testing.T) {
+	service := NewRuntimeConnectionService(fakeRuntimeRepo{}, nil).WithCredentialResolver(fakeCredentialResolver{})
+
+	conn, err := service.Create(context.Background(), CreateRuntimeConnectionInput{
+		Name: "local-langgraph", Kind: domain.RuntimeKindLangGraph,
+		Mode: domain.RuntimeModeControlEnabled, Endpoint: "http://127.0.0.1:2024",
+		AuthRef: "langgraph-key", Actor: "test", Reason: "enable controls",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if conn.Mode != domain.RuntimeModeControlEnabled {
+		t.Fatalf("mode = %q, want %q", conn.Mode, domain.RuntimeModeControlEnabled)
+	}
+}
+
+func TestRuntimeConnectionServiceUpdateSettings(t *testing.T) {
+	service := NewRuntimeConnectionService(fakeRuntimeRepo{}, fakeAuditRepo{}).WithCredentialResolver(fakeCredentialResolver{})
+
+	conn, err := service.UpdateSettings(context.Background(), UpdateRuntimeInstanceSettingsInput{
+		ID: "runtime-1", DisplayName: "Gantry Production", Environment: "production",
+		Labels: map[string]string{"Team": "Platform"}, Mode: domain.RuntimeModeControlEnabled,
+		Endpoint: "HTTP://127.0.0.1:8787/", AuthRef: "gantry-key",
+		Description: "Primary control runtime", SyncEnabled: true, SyncIntervalSeconds: 90,
+		Actor: "test", Reason: "promote runtime",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings returned error: %v", err)
+	}
+	if conn.DisplayName != "Gantry Production" || conn.Environment != "production" {
+		t.Fatalf("identity = %#v", conn)
+	}
+	if conn.Mode != domain.RuntimeModeControlEnabled || conn.BaseURL != "http://127.0.0.1:8787" {
+		t.Fatalf("connection settings = %#v", conn)
+	}
+	if !conn.SyncEnabled || conn.SyncIntervalSeconds != 90 || conn.Metadata["description"] != "Primary control runtime" {
+		t.Fatalf("sync settings = %#v", conn)
+	}
+}
+
+func TestRuntimeConnectionServiceUpdateSettingsValidatesSyncInterval(t *testing.T) {
+	service := NewRuntimeConnectionService(fakeRuntimeRepo{}, nil).WithCredentialResolver(fakeCredentialResolver{})
+	_, err := service.UpdateSettings(context.Background(), UpdateRuntimeInstanceSettingsInput{
+		ID: "runtime-1", DisplayName: "Gantry", Environment: "development",
+		Mode: domain.RuntimeModeReadOnly, Endpoint: "http://127.0.0.1:8787",
+		AuthRef: "gantry-key", SyncIntervalSeconds: 5, Actor: "test", Reason: "test",
+	})
+	if err == nil {
+		t.Fatal("UpdateSettings returned nil error")
+	}
+}
+
+func TestRuntimeConnectionServiceRemoveArchivesWithConfirmation(t *testing.T) {
+	repository := &archivingRuntimeRepo{}
+	service := NewRuntimeConnectionService(repository, fakeAuditRepo{})
+
+	err := service.Remove(context.Background(), RemoveRuntimeInstanceInput{
+		ID: "runtime-1", Confirmation: "runtime", Actor: "test",
+		Reason: "duplicate connection",
+	})
+	if err != nil {
+		t.Fatalf("Remove returned error: %v", err)
+	}
+	if repository.archivedID != "runtime-1" {
+		t.Fatalf("archived id = %q, want runtime-1", repository.archivedID)
+	}
+}
+
+func TestRuntimeConnectionServiceRemoveRejectsWrongConfirmation(t *testing.T) {
+	repository := &archivingRuntimeRepo{}
+	service := NewRuntimeConnectionService(repository, nil)
+
+	err := service.Remove(context.Background(), RemoveRuntimeInstanceInput{
+		ID: "runtime-1", Confirmation: "wrong", Actor: "test",
+		Reason: "duplicate connection",
+	})
+	if err == nil {
+		t.Fatal("Remove returned nil error")
+	}
+	if repository.archivedID != "" {
+		t.Fatalf("archived id = %q, want empty", repository.archivedID)
+	}
+}
+
+func TestRuntimeConnectionServiceConsolidatesDuplicateAsEndpoint(t *testing.T) {
+	repository := &consolidatingRuntimeRepo{}
+	service := NewRuntimeConnectionService(repository, fakeAuditRepo{})
+
+	conn, err := service.ConsolidateEndpoint(context.Background(), ConsolidateRuntimeEndpointInput{
+		CanonicalID: "runtime-1", DuplicateID: "runtime-2",
+		Kind: domain.RuntimeEndpointRelay, Confirmation: "runtime",
+		Actor: "test", Reason: "same runtime through local relay",
+	})
+	if err != nil {
+		t.Fatalf("ConsolidateEndpoint returned error: %v", err)
+	}
+	if conn.ID != "runtime-1" || repository.canonicalID != "runtime-1" ||
+		repository.duplicateID != "runtime-2" || repository.kind != domain.RuntimeEndpointRelay {
+		t.Fatalf("consolidation = %#v, repository = %#v", conn, repository)
+	}
+}
+
 func TestRuntimeConnectionServiceRoutesSameAgentIDToSelectedInstance(t *testing.T) {
 	adapter := &recordingAdapter{}
 	service := NewRuntimeConnectionService(multiRuntimeRepo{}, nil).WithAdapter(adapter)
@@ -109,16 +211,45 @@ func (fakeRuntimeRepo) Create(_ context.Context, conn domain.RuntimeConnection) 
 	return conn, nil
 }
 
-func (fakeRuntimeRepo) UpdateIdentity(_ context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
+func (fakeRuntimeRepo) UpdateSettings(_ context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
 	return conn, nil
 }
 
 func (fakeRuntimeRepo) Get(_ context.Context, id string) (domain.RuntimeConnection, error) {
-	return domain.RuntimeConnection{ID: id, Name: "runtime", Kind: domain.RuntimeKindGantry, AuthRef: "gantry-key"}, nil
+	return domain.RuntimeConnection{ID: id, Name: "runtime", Kind: domain.RuntimeKindGantry, AuthRef: "gantry-key", Metadata: map[string]any{}}, nil
 }
 
 func (fakeRuntimeRepo) List(context.Context) ([]domain.RuntimeConnection, error) {
 	return []domain.RuntimeConnection{{ID: "runtime-1", Name: "runtime"}}, nil
+}
+
+type archivingRuntimeRepo struct {
+	fakeRuntimeRepo
+	archivedID string
+}
+
+type consolidatingRuntimeRepo struct {
+	fakeRuntimeRepo
+	canonicalID string
+	duplicateID string
+	kind        domain.RuntimeEndpointKind
+}
+
+func (r *consolidatingRuntimeRepo) ConsolidateEndpoint(
+	_ context.Context,
+	canonicalID, duplicateID string,
+	kind domain.RuntimeEndpointKind,
+	_, _ string,
+) error {
+	r.canonicalID = canonicalID
+	r.duplicateID = duplicateID
+	r.kind = kind
+	return nil
+}
+
+func (r *archivingRuntimeRepo) Archive(_ context.Context, id, _, _ string) error {
+	r.archivedID = id
+	return nil
 }
 
 type multiRuntimeRepo struct{}
@@ -126,7 +257,7 @@ type multiRuntimeRepo struct{}
 func (multiRuntimeRepo) Create(context.Context, domain.RuntimeConnection) (domain.RuntimeConnection, error) {
 	return domain.RuntimeConnection{}, fmt.Errorf("not implemented")
 }
-func (multiRuntimeRepo) UpdateIdentity(_ context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
+func (multiRuntimeRepo) UpdateSettings(_ context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
 	return conn, nil
 }
 func (multiRuntimeRepo) Get(_ context.Context, id string) (domain.RuntimeConnection, error) {

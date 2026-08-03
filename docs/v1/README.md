@@ -38,6 +38,7 @@ The product is not an observability dashboard or a new agent runtime. Gantry run
 | 15 | `15-multi-runtime-instances.md` | Multi-instance identity, isolation, API hierarchy, and console contract |
 | 16 | `16-adapter-roadmap-and-webhook-plan.md` | Gantry completion matrix, signed webhook plan, adapter priorities, and enterprise deployment patterns |
 | 17 | `17-langgraph-agent-server-adapter.md` | Implemented LangGraph read-only contract, normalization, local fixture, and live verification runbook |
+| 18 | `18-telemetry-and-metrics.md` | Runtime-neutral telemetry schema, connectors, source precedence, privacy, metrics API, and console contract |
 
 ## V1 Decisions
 
@@ -53,6 +54,7 @@ The product is not an observability dashboard or a new agent runtime. Gantry run
 - Second runtime adapter: LangGraph Agent Server read-only inventory and execution sync, implemented and live-tested on 2026-07-21.
 - Cloud runtime adapters: AgentCore, Foundry Agent Service, then Vertex AI Agent Engine, adjusted by customer cloud demand.
 - OpenTelemetry and observability platforms are telemetry connectors, not authoritative runtime adapters.
+- Usage telemetry is non-authoritative and never replaces runtime inventory, access, or control state.
 
 ## Definition Of V1 Done
 
@@ -65,3 +67,5 @@ The product is not an observability dashboard or a new agent runtime. Gantry run
 - Operator can restrict access or disable/enable an agent.
 - Every mutation has actor, reason, before, after, result, and timestamp.
 - Gantry outage marks runtime degraded and preserves last known state.
+- Gantry and instrumented LangGraph usage is queryable per agent without double counting overlapping polls.
+- Uninstrumented runtimes report telemetry as not configured rather than zero.

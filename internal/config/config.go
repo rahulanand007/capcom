@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -25,13 +27,30 @@ var defaultCORSAllowedOrigins = []string{
 }
 
 type Config struct {
-	HTTP     HTTPConfig
-	Database DatabaseConfig
-	Secrets  SecretConfig
-	Security SecurityConfig
-	Service  ServiceConfig
-	Sync     SyncConfig
-	LogLevel slog.Level
+	HTTP      HTTPConfig
+	Database  DatabaseConfig
+	Secrets   SecretConfig
+	Security  SecurityConfig
+	Service   ServiceConfig
+	Sync      SyncConfig
+	Telemetry TelemetryConfig
+	LogLevel  slog.Level
+}
+
+type TelemetryConfig struct {
+	WorkerEnabled  bool
+	WorkerTick     time.Duration
+	RequestTimeout time.Duration
+	ModelCatalog   []ModelMetadataConfig
+}
+
+type ModelMetadataConfig struct {
+	Provider                 string `json:"provider"`
+	Model                    string `json:"model"`
+	ContextWindowTokens      int64  `json:"context_window_tokens"`
+	InputCostPer1MTokensUSD  string `json:"input_cost_per_1m_tokens_usd"`
+	OutputCostPer1MTokensUSD string `json:"output_cost_per_1m_tokens_usd"`
+	Version                  string `json:"version"`
 }
 
 type SyncConfig struct {
@@ -131,6 +150,22 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	telemetryWorkerEnabled, err := boolEnv(lookup, "CAPCOM_TELEMETRY_WORKER_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryWorkerTick, err := durationEnv(lookup, "CAPCOM_TELEMETRY_WORKER_TICK", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryRequestTimeout, err := durationEnv(lookup, "CAPCOM_TELEMETRY_REQUEST_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	modelCatalog, err := modelCatalogEnv(lookup, "CAPCOM_MODEL_CATALOG_JSON")
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		HTTP: HTTPConfig{
@@ -159,8 +194,39 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 			RequestTimeout:   requestTimeout,
 			MissingThreshold: missingThreshold,
 		},
+		Telemetry: TelemetryConfig{
+			WorkerEnabled:  telemetryWorkerEnabled,
+			WorkerTick:     telemetryWorkerTick,
+			RequestTimeout: telemetryRequestTimeout,
+			ModelCatalog:   modelCatalog,
+		},
 		LogLevel: logLevel,
 	}, nil
+}
+
+func modelCatalogEnv(lookup func(string) (string, bool), key string) ([]ModelMetadataConfig, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var catalog []ModelMetadataConfig
+	if err := json.Unmarshal([]byte(value), &catalog); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", key, err)
+	}
+	for index, item := range catalog {
+		if strings.TrimSpace(item.Model) == "" || item.ContextWindowTokens < 0 {
+			return nil, fmt.Errorf("%s item %d requires model and non-negative context_window_tokens", key, index)
+		}
+		for _, price := range []string{item.InputCostPer1MTokensUSD, item.OutputCostPer1MTokensUSD} {
+			if price != "" {
+				value, valid := new(big.Rat).SetString(price)
+				if !valid || value.Sign() < 0 {
+					return nil, fmt.Errorf("%s item %d has invalid non-negative pricing", key, index)
+				}
+			}
+		}
+	}
+	return catalog, nil
 }
 
 func boolEnv(lookup func(string) (string, bool), key string, fallback bool) (bool, error) {

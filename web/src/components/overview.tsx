@@ -2,9 +2,11 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { AddInstanceDialog } from "@/components/add-instance-dialog"
+import { RemoveInstanceDialog } from "@/components/remove-instance-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -198,6 +200,7 @@ function AttentionQueue({
 function AttentionRow({ item }: { item: AttentionItem }) {
   const styles = statusClass(item.status)
   const syncMutation = useSyncRuntimeInstanceMutation(item.instanceId)
+  const [removeOpen, setRemoveOpen] = React.useState(false)
 
   return (
     <div className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
@@ -218,25 +221,46 @@ function AttentionRow({ item }: { item: AttentionItem }) {
           <p className="mt-1 text-[13px] text-[var(--mu)]">{item.message}</p>
         </div>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        className="justify-self-start font-hud text-xs hover:border-[var(--ac)] hover:text-[var(--ac)] md:justify-self-end"
-        disabled={syncMutation.isPending}
-        onClick={() => {
-          syncMutation.mutate(
-            {
-              actor: "local-operator",
-              reason: `Overview attention action for ${item.instanceName}`,
-            },
-            {
-              onSuccess: () => toast.success(`${item.instanceName} sync complete`),
-            }
-          )
-        }}
-      >
-        {syncMutation.isPending ? "Importing" : item.action}
-      </Button>
+      <div className="flex justify-self-start gap-2 md:justify-self-end">
+        <Button
+          variant="outline"
+          size="sm"
+          className="font-hud text-xs hover:border-[var(--ac)] hover:text-[var(--ac)]"
+          disabled={syncMutation.isPending}
+          onClick={() => {
+            syncMutation.mutate(
+              {
+                actor: "local-operator",
+                reason: `Overview attention action for ${item.instanceName}`,
+              },
+              {
+                onSuccess: () =>
+                  toast.success(`${item.instanceName} sync complete`),
+              }
+            )
+          }}
+        >
+          {syncMutation.isPending ? "Importing" : item.action}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="font-hud text-xs text-red-300 hover:border-red-500/60 hover:bg-red-500/10 hover:text-red-200"
+          onClick={() => setRemoveOpen(true)}
+        >
+          <Trash2 className="size-3.5" />
+          Remove
+        </Button>
+        <RemoveInstanceDialog
+          instance={{
+            id: item.instanceId,
+            name: item.instanceStableKey,
+            display_name: item.instanceName,
+          }}
+          open={removeOpen}
+          onOpenChange={setRemoveOpen}
+        />
+      </div>
     </div>
   )
 }

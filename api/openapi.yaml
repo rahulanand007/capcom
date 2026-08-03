@@ -130,8 +130,8 @@ paths:
         "503":
           $ref: "#/components/responses/Error"
     patch:
-      summary: Update mutable runtime instance identity
-      operationId: updateRuntimeInstanceIdentity
+      summary: Update mutable runtime instance settings
+      operationId: updateRuntimeInstanceSettings
       parameters:
         - $ref: "#/components/parameters/RuntimeConnectionID"
       requestBody:
@@ -139,7 +139,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpdateRuntimeInstanceIdentityRequest"
+              $ref: "#/components/schemas/UpdateRuntimeInstanceSettingsRequest"
       responses:
         "200":
           description: Updated runtime instance
@@ -147,6 +147,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuntimeConnection"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: Remove a runtime instance from active operation
+      description: Soft-removes the instance while retaining imported state and audit history.
+      operationId: removeRuntimeInstance
+      parameters:
+        - $ref: "#/components/parameters/RuntimeConnectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoveRuntimeInstanceRequest"
+      responses:
+        "204":
+          description: Runtime instance removed
         "400":
           $ref: "#/components/responses/Error"
         "404":
@@ -315,6 +334,29 @@ paths:
     $ref: "#/paths/~1v1~1runtime-connections~1{id}~1sync"
   /v1/runtime-instances/{id}/sync-runs:
     $ref: "#/paths/~1v1~1runtime-connections~1{id}~1sync-runs"
+  /v1/runtime-instances/{id}/endpoints/consolidate:
+    post:
+      summary: Consolidate a duplicate runtime connection as an endpoint route
+      operationId: consolidateRuntimeEndpoint
+      parameters:
+        - $ref: "#/components/parameters/RuntimeConnectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsolidateRuntimeEndpointRequest"
+      responses:
+        "200":
+          description: Canonical runtime instance with updated endpoint topology
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeConnection"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/runtime-instances/{id}/agents:
     get:
       summary: List persisted agents belonging to one runtime instance
@@ -442,6 +484,36 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AgentDelegation"
+  /v1/runtime-instances/{id}/metrics:
+    get:
+      summary: Get usage metrics for one runtime instance
+      operationId: getRuntimeInstanceMetrics
+      parameters:
+        - $ref: "#/components/parameters/RuntimeConnectionID"
+        - $ref: "#/components/parameters/MetricsFrom"
+        - $ref: "#/components/parameters/MetricsTo"
+        - $ref: "#/components/parameters/MetricsInterval"
+        - $ref: "#/components/parameters/MetricsSource"
+      responses:
+        "200":
+          description: Preferred-source runtime metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsSummary"
+  /v1/runtime-instances/{id}/telemetry-health:
+    get:
+      summary: Get latest telemetry connector health
+      operationId: getRuntimeInstanceTelemetryHealth
+      parameters:
+        - $ref: "#/components/parameters/RuntimeConnectionID"
+      responses:
+        "200":
+          description: Latest ingestion status or not-configured state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryHealth"
   /v1/runtime-instances/{id}/live/agents:
     get:
       summary: Read live agents through one runtime instance adapter
@@ -496,6 +568,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PersistedAgent"
+  /v1/agents/{id}/metrics:
+    get:
+      summary: Get usage metrics for one persisted agent
+      operationId: getAgentMetrics
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/MetricsFrom"
+        - $ref: "#/components/parameters/MetricsTo"
+        - $ref: "#/components/parameters/MetricsInterval"
+        - $ref: "#/components/parameters/MetricsSource"
+      responses:
+        "200":
+          description: Preferred-source agent metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsSummary"
+  /v1/metrics/summary:
+    get:
+      summary: Get fleet usage metrics
+      operationId: getMetricsSummary
+      parameters:
+        - $ref: "#/components/parameters/MetricsFrom"
+        - $ref: "#/components/parameters/MetricsTo"
+        - $ref: "#/components/parameters/MetricsInterval"
+        - $ref: "#/components/parameters/MetricsSource"
+      responses:
+        "200":
+          description: Preferred-source fleet metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsSummary"
+  /v1/telemetry/otlp/v1/traces:
+    post:
+      summary: Ingest authenticated OTLP/HTTP JSON traces
+      operationId: ingestOTLPTraces
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+          application/x-protobuf:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Ingestion counts
   /v1/agents/{id}/access:
     get:
       summary: Get persisted effective access
@@ -718,6 +840,22 @@ components:
       required: true
       schema:
         type: string
+    MetricsFrom:
+      name: from
+      in: query
+      schema: { type: string, format: date-time }
+    MetricsTo:
+      name: to
+      in: query
+      schema: { type: string, format: date-time }
+    MetricsInterval:
+      name: interval
+      in: query
+      schema: { type: string, enum: [5m, 15m, 1h, 6h, 1d], default: 1h }
+    MetricsSource:
+      name: source
+      in: query
+      schema: { type: string, enum: [gantry_native, langsmith, otel] }
   responses:
     Error:
       description: Error response
@@ -781,7 +919,7 @@ components:
           type: string
     RuntimeConnection:
       type: object
-      required: [id, name, display_name, environment, labels, runtime_type, mode, status, endpoint, auth_ref, created_at, updated_at]
+      required: [id, name, display_name, environment, labels, runtime_type, mode, status, endpoint, endpoints, auth_ref, created_at, updated_at, sync_enabled, sync_interval_seconds]
       properties:
         id:
           type: string
@@ -797,23 +935,6 @@ components:
             type: string
         description:
           type: string
-    UpdateRuntimeInstanceIdentityRequest:
-      type: object
-      required: [display_name, environment, actor, reason]
-      properties:
-        display_name:
-          type: string
-        environment:
-          type: string
-          pattern: "^[a-z][a-z0-9_-]{0,31}$"
-        labels:
-          type: object
-          additionalProperties:
-            type: string
-        actor:
-          type: string
-        reason:
-          type: string
         runtime_type:
           type: string
           enum: [gantry, langgraph]
@@ -825,6 +946,11 @@ components:
           enum: [pending, active, degraded, disabled, failed]
         endpoint:
           type: string
+          format: uri
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuntimeEndpoint"
         auth_ref:
           type: string
           description: Secret reference only; secret material is never returned.
@@ -837,6 +963,107 @@ components:
         updated_at:
           type: string
           format: date-time
+        sync_enabled:
+          type: boolean
+        sync_interval_seconds:
+          type: integer
+        last_sync_status:
+          type: string
+        last_sync_started_at:
+          type: string
+          format: date-time
+        last_sync_finished_at:
+          type: string
+          format: date-time
+        last_sync_duration_ms:
+          type: integer
+          format: int64
+        last_error:
+          type: string
+    RuntimeEndpoint:
+      type: object
+      required: [id, endpoint, kind, auth_ref, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        endpoint:
+          type: string
+          format: uri
+        kind:
+          type: string
+          enum: [canonical, alias, relay]
+        auth_ref:
+          type: string
+          description: Secret reference used by this route.
+        source_runtime_instance_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpdateRuntimeInstanceSettingsRequest:
+      type: object
+      required: [display_name, environment, mode, endpoint, auth_ref, sync_enabled, sync_interval_seconds, actor, reason]
+      properties:
+        display_name:
+          type: string
+        environment:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,31}$"
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        mode:
+          type: string
+          enum: [read_only, control_enabled]
+        endpoint:
+          type: string
+          format: uri
+        auth_ref:
+          type: string
+          description: Reference to encrypted secret material; never plaintext credentials.
+        description:
+          type: string
+        sync_enabled:
+          type: boolean
+        sync_interval_seconds:
+          type: integer
+          minimum: 15
+          maximum: 86400
+        actor:
+          type: string
+        reason:
+          type: string
+    RemoveRuntimeInstanceRequest:
+      type: object
+      required: [confirmation, actor, reason]
+      properties:
+        confirmation:
+          type: string
+          description: Must exactly match the runtime instance stable key.
+        actor:
+          type: string
+        reason:
+          type: string
+    ConsolidateRuntimeEndpointRequest:
+      type: object
+      required: [duplicate_runtime_instance_id, kind, confirmation, actor, reason]
+      properties:
+        duplicate_runtime_instance_id:
+          type: string
+        kind:
+          type: string
+          enum: [alias, relay]
+        confirmation:
+          type: string
+          description: Must exactly match the duplicate runtime instance stable key.
+        actor:
+          type: string
+        reason:
+          type: string
     RuntimeConnectionTestResult:
       type: object
       required: [status, message, capabilities]
@@ -1294,9 +1521,103 @@ components:
         updated_at:
           type: string
           format: date-time
+    MetricsSummary:
+      type: object
+      required: [period, available, configured, status, usage, performance, context]
+      properties:
+        agent_id: { type: string }
+        runtime_connection_id: { type: string }
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        available: { type: boolean }
+        configured: { type: boolean }
+        status: { type: string, enum: [available, unavailable, not_configured] }
+        source: { type: string, enum: [gantry_native, langsmith, otel] }
+        last_observed_at: { type: string, format: date-time, nullable: true }
+        usage:
+          type: object
+          properties:
+            requests: { type: integer, format: int64 }
+            input_tokens: { type: integer, format: int64 }
+            output_tokens: { type: integer, format: int64 }
+            cached_input_tokens: { type: integer, format: int64 }
+            cache_creation_tokens: { type: integer, format: int64 }
+            reasoning_tokens: { type: integer, format: int64 }
+            total_tokens: { type: integer, format: int64 }
+            estimated_cost_usd: { type: number, nullable: true }
+        performance:
+          type: object
+          properties:
+            average_duration_ms: { type: number, nullable: true }
+            p95_duration_ms: { type: number, nullable: true }
+            error_rate: { type: number, nullable: true }
+        context:
+          type: object
+          properties:
+            utilization: { type: number, nullable: true }
+            quality: { type: string, enum: [estimated] }
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              model: { type: string }
+              request_count: { type: integer, format: int64 }
+              input_tokens: { type: integer, format: int64 }
+              output_tokens: { type: integer, format: int64 }
+              total_tokens: { type: integer, format: int64 }
+        time_series:
+          type: array
+          items:
+            type: object
+            properties:
+              started_at: { type: string, format: date-time }
+              request_count: { type: integer, format: int64 }
+              input_tokens: { type: integer, format: int64 }
+              output_tokens: { type: integer, format: int64 }
+              total_tokens: { type: integer, format: int64 }
+    TelemetryHealth:
+      type: object
+      required: [configured, status]
+      properties:
+        configured: { type: boolean }
+        status:
+          type: string
+          enum: [running, succeeded, failed, not_configured]
+        source:
+          type: string
+          enum: [gantry_native, langsmith, otel]
+        schema_version: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+        last_successful_at: { type: string, format: date-time, nullable: true }
+        records_accepted: { type: integer, format: int64 }
+        records_rejected: { type: integer, format: int64 }
+        records_deduplicated: { type: integer, format: int64 }
+        error_code:
+          type: string
+          description: Stable safe collector error code.
+        message:
+          type: string
+          description: Safe actionable operator message.
+        retryable: { type: boolean }
     ErrorResponse:
       type: object
       required: [error]
       properties:
         error:
-          type: string
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error code.
+            message:
+              type: string
+              description: Safe, actionable message suitable for operators.
+            retryable:
+              type: boolean

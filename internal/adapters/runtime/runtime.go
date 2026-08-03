@@ -23,6 +23,18 @@ type Adapter interface {
 	CollectSnapshot(ctx context.Context, conn domain.RuntimeConnection) (*domain.RuntimeSnapshot, error)
 }
 
+// UsageReader is an optional telemetry capability implemented beside Adapter.
+// It does not participate in inventory, access, or control synchronization.
+type UsageReader interface {
+	QueryUsage(ctx context.Context, conn domain.RuntimeConnection, query domain.UsageQuery) ([]domain.UsageObservation, error)
+}
+
+// UsageReaderConfigurator lets optional connectors distinguish unavailable
+// telemetry from a measured zero.
+type UsageReaderConfigurator interface {
+	TelemetryConfigured(conn domain.RuntimeConnection) bool
+}
+
 type CheckResult struct {
 	Status       domain.RuntimeStatus
 	Message      string

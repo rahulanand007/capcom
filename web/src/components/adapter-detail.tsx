@@ -6,6 +6,11 @@ import { Ban, ChevronDown, ChevronRight, GitBranch, RefreshCw } from "lucide-rea
 import { toast } from "sonner"
 
 import { AddInstanceDialog } from "@/components/add-instance-dialog"
+import { AdapterSettingsDialog } from "@/components/adapter-settings-dialog"
+import {
+  ConsolidateInstanceDialog,
+  EndpointTopology,
+} from "@/components/consolidate-instance-dialog"
 import { AgentDrilldownDrawer } from "@/components/agent-drilldown-drawer"
 import { RuntimeCatalogPanel } from "@/components/runtime-catalog-panel"
 import {
@@ -83,6 +88,8 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
   const queryClient = useQueryClient()
   const [syncAllOpen, setSyncAllOpen] = React.useState(false)
   const [addInstanceOpen, setAddInstanceOpen] = React.useState(false)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [consolidateOpen, setConsolidateOpen] = React.useState(false)
   const [selectedAgent, setSelectedAgent] = React.useState<PersistedAgent | null>(
     null
   )
@@ -204,10 +211,20 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
           <Button
             variant="outline"
             className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
-            onClick={() => toast.info("Adapter settings arrive in a later stage.")}
+            onClick={() => setSettingsOpen(true)}
           >
             Adapter settings
           </Button>
+          {adapter.instances.length > 1 ? (
+            <Button
+              variant="outline"
+              className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
+              onClick={() => setConsolidateOpen(true)}
+            >
+              <GitBranch className="size-4" />
+              Consolidate connections
+            </Button>
+          ) : null}
           <Button
             className="shadow-[0_0_0_3px_var(--glow)] hover:brightness-[1.08]"
             onClick={() => setSyncAllOpen(true)}
@@ -257,6 +274,18 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
         open={addInstanceOpen}
         defaultAdapterId={runtimeTypeFromRoute(adapterId)}
         onOpenChange={setAddInstanceOpen}
+      />
+
+      <AdapterSettingsDialog
+        adapterName={adapter.name}
+        instances={adapter.instances.map((item) => item.instance)}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
+      <ConsolidateInstanceDialog
+        instances={adapter.instances.map((item) => item.instance)}
+        open={consolidateOpen}
+        onOpenChange={setConsolidateOpen}
       />
     </section>
   )
@@ -356,6 +385,10 @@ function InstanceGroup({
 
         <CollapsibleContent>
           <div className="border-t border-[var(--sl)]">
+            <EndpointTopology
+              endpoints={item.instance.endpoints}
+              fallback={item.instance.endpoint}
+            />
             <AgentSubTable
               loading={agentsQuery.isLoading}
               agents={shownAgents}
@@ -683,7 +716,6 @@ function RuntimeExecutionsPanel({
                     )
                     setCancelTarget(null)
                   },
-                  onError: (error) => toast.error(error.message),
                 }
               )
             }}

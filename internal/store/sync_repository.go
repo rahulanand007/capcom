@@ -466,7 +466,8 @@ CASE WHEN rc.status='degraded' OR a.status='stale' THEN 'stale'
 WHEN rc.last_sync_at < now() - make_interval(secs => rc.sync_interval_seconds) THEN 'cached' ELSE 'live' END
 FROM agents a JOIN agent_runtime_bindings b ON b.agent_id=a.id
 JOIN runtime_connections rc ON rc.id=b.runtime_connection_id
-WHERE ($1='' OR b.runtime_connection_id=$1::uuid) ORDER BY a.name`, runtimeID)
+WHERE rc.archived_at IS NULL
+AND ($1='' OR b.runtime_connection_id=$1::uuid) ORDER BY a.name`, runtimeID)
 	if err != nil {
 		return nil, fmt.Errorf("list persisted agents: %w", err)
 	}

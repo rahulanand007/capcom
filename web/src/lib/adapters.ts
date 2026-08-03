@@ -28,6 +28,7 @@ export type AttentionItem = {
   adapterName: string
   instanceId: string
   instanceName: string
+  instanceStableKey: string
   status: DerivedStatus
   badge: "stale" | "failed"
   message: string
@@ -43,6 +44,9 @@ export function buildAdaptersModel(
 ) {
   const agentsByRuntime = new Map<string, number>()
   for (const agent of agents) {
+    if (agent.status === "disabled" || agent.metadata?.runtime_deleted) {
+      continue
+    }
     agentsByRuntime.set(
       agent.runtime_connection_id,
       (agentsByRuntime.get(agent.runtime_connection_id) ?? 0) + 1
@@ -106,6 +110,7 @@ export function buildAdaptersModel(
         adapterName: adapter.name,
         instanceId: item.instance.id,
         instanceName: item.instance.display_name || item.instance.name,
+        instanceStableKey: item.instance.name,
         status: item.status,
         badge: item.status === "failed" ? ("failed" as const) : ("stale" as const),
         message: item.message,

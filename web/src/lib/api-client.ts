@@ -1,13 +1,17 @@
 import type {
   AgentDelegation,
   CreateRuntimeInstanceRequest,
+  ConsolidateRuntimeEndpointRequest,
   CreateSecretRequest,
   CancelExecutionRequest,
   ControlAction,
   DeleteAgentRequest,
   HealthResponse,
+  MetricSummary,
+  TelemetryHealth,
   PersistedAgent,
   ReconcileAccessRequest,
+  RemoveRuntimeInstanceRequest,
   RuntimeAgentAccess,
   RuntimeAgentSkill,
   RuntimeConnectionTestResult,
@@ -20,6 +24,7 @@ import type {
   SubagentExecution,
   SetAgentStatusRequest,
   SyncRuntimeRequest,
+  UpdateRuntimeInstanceSettingsRequest,
 } from "@/lib/api-types"
 
 const API_BASE_URL = "/api/capcom"
@@ -79,6 +84,17 @@ function errorMessage(data: unknown, fallback: string) {
   ) {
     return data.error
   }
+  if (
+    data &&
+    typeof data === "object" &&
+    "error" in data &&
+    data.error &&
+    typeof data.error === "object" &&
+    "message" in data.error &&
+    typeof data.error.message === "string"
+  ) {
+    return data.error.message
+  }
   return fallback || "Request failed"
 }
 
@@ -92,6 +108,12 @@ function searchParams(params: Record<string, string | undefined>) {
   const query = out.toString()
   return query ? `?${query}` : ""
 }
+
+const METRICS_RANGES = {
+  "24h": { durationMs: 24 * 60 * 60 * 1000, interval: "1h" },
+  "7d": { durationMs: 7 * 24 * 60 * 60 * 1000, interval: "6h" },
+  "30d": { durationMs: 30 * 24 * 60 * 60 * 1000, interval: "1d" },
+} as const
 
 export const capcomApi = {
   health: () => request<HealthResponse>("/healthz"),
@@ -108,6 +130,27 @@ export const capcomApi = {
   listRuntimeInstances: () => request<RuntimeInstance[]>("/v1/runtime-instances"),
   getRuntimeInstance: (id: string) =>
     request<RuntimeInstance>(`/v1/runtime-instances/${id}`),
+  updateRuntimeInstanceSettings: (
+    id: string,
+    body: UpdateRuntimeInstanceSettingsRequest
+  ) =>
+    request<RuntimeInstance>(`/v1/runtime-instances/${id}`, {
+      method: "PATCH",
+      body,
+    }),
+  removeRuntimeInstance: (id: string, body: RemoveRuntimeInstanceRequest) =>
+    request<void>(`/v1/runtime-instances/${id}`, {
+      method: "DELETE",
+      body,
+    }),
+  consolidateRuntimeEndpoint: (
+    canonicalId: string,
+    body: ConsolidateRuntimeEndpointRequest
+  ) =>
+    request<RuntimeInstance>(
+      `/v1/runtime-instances/${canonicalId}/endpoints/consolidate`,
+      { method: "POST", body }
+    ),
   testRuntimeInstance: (id: string) =>
     request<RuntimeConnectionTestResult>(`/v1/runtime-instances/${id}/test`, {
       method: "POST",
@@ -144,6 +187,34 @@ export const capcomApi = {
       })}`
     ),
   getPersistedAgent: (id: string) => request<PersistedAgent>(`/v1/agents/${id}`),
+  getAgentMetrics: (id: string) =>
+    request<MetricSummary>(`/v1/agents/${id}/metrics?interval=1h`),
+  getMetricsSummary: (range: keyof typeof METRICS_RANGES = "24h") => {
+    const to = new Date()
+    const config = METRICS_RANGES[range]
+    const from = new Date(to.getTime() - config.durationMs)
+    return request<MetricSummary>(
+      `/v1/metrics/summary${searchParams({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        interval: config.interval,
+      })}`
+    )
+  },
+  getRuntimeTelemetryHealth: (id: string) =>
+    request<TelemetryHealth>(`/v1/runtime-instances/${id}/telemetry-health`),
+  getFleetTelemetryHealth: async () => {
+    const instances = await request<RuntimeInstance[]>("/v1/runtime-instances")
+    return Promise.all(
+      instances.map(async (instance) => ({
+        ...(await request<TelemetryHealth>(
+          `/v1/runtime-instances/${instance.id}/telemetry-health`
+        )),
+        runtime_connection_id: instance.id,
+        runtime_display_name: instance.display_name || instance.name,
+      }))
+    )
+  },
   listAgentSkills: (id: string) =>
     request<RuntimeAgentSkill[]>(`/v1/agents/${id}/skills`),
   getAgentAccess: (id: string) =>

@@ -15,9 +15,11 @@ import (
 	"capcom/internal/adapters/langgraph"
 	"capcom/internal/api"
 	"capcom/internal/config"
+	"capcom/internal/domain"
 	secretcipher "capcom/internal/secrets"
 	"capcom/internal/services"
 	"capcom/internal/store"
+	langsmithtelemetry "capcom/internal/telemetry/langsmith"
 	"capcom/internal/workers"
 )
 
@@ -49,6 +51,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		AllowedOrigins: cfg.Security.AllowedOrigins,
 	}
 	var syncWorker *workers.RuntimeSyncWorker
+	var telemetryWorker *workers.TelemetryWorker
 	if cfg.Database.URL != "" {
 		if cfg.Security.AdminToken == "" {
 			return fmt.Errorf("CAPCOM_ADMIN_TOKEN is required when CAPCOM_DATABASE_URL is configured")
@@ -77,18 +80,40 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		runtimeRepository := store.NewRuntimeConnectionRepository(db)
 		gantryAdapter := gantry.NewClient(nil, secretService)
 		langGraphAdapter := langgraph.NewClient(nil, secretService)
+		langSmithConnector := langsmithtelemetry.NewClient(nil, secretService)
 		runtimeService := services.NewRuntimeConnectionService(runtimeRepository, auditRepository).
 			WithCredentialResolver(secretService).WithAdapter(gantryAdapter).WithAdapter(langGraphAdapter)
 		syncService := services.NewRuntimeSyncService(runtimeRepository, store.NewSyncRepository(db), auditRepository, cfg.Sync.MissingThreshold).
 			WithAdapter(gantryAdapter).WithAdapter(langGraphAdapter)
 		controlService := services.NewControlActionService(runtimeRepository, store.NewSyncRepository(db), store.NewControlActionRepository(db), auditRepository, syncService).
 			WithAdapter(gantryAdapter).WithAdapter(langGraphAdapter)
+		telemetryRepository := store.NewTelemetryRepository(db)
+		modelMetadata := make([]services.ModelMetadata, 0, len(cfg.Telemetry.ModelCatalog))
+		for _, item := range cfg.Telemetry.ModelCatalog {
+			modelMetadata = append(modelMetadata, services.ModelMetadata{
+				Provider: item.Provider, Model: item.Model,
+				ContextWindowTokens:   item.ContextWindowTokens,
+				InputCostPer1MTokens:  decimalFromConfig(item.InputCostPer1MTokensUSD),
+				OutputCostPer1MTokens: decimalFromConfig(item.OutputCostPer1MTokensUSD),
+				Version:               item.Version,
+			})
+		}
+		telemetryService := services.NewTelemetryService(telemetryRepository).
+			WithModelMetadataResolver(services.NewModelCatalog(modelMetadata))
 		routerConfig.Secrets = secretService
 		routerConfig.RuntimeConnections = runtimeService
 		routerConfig.RuntimeSync = syncService
 		routerConfig.ControlActions = controlService
+		routerConfig.Telemetry = telemetryService
 		if cfg.Sync.WorkerEnabled {
 			syncWorker = workers.NewRuntimeSyncWorker(runtimeService, syncService, cfg.Sync.WorkerTick, cfg.Sync.MaxConcurrency, cfg.Sync.RequestTimeout, logger)
+		}
+		if cfg.Telemetry.WorkerEnabled {
+			telemetryWorker = workers.NewTelemetryWorker(
+				runtimeService, telemetryService, telemetryRepository,
+				cfg.Telemetry.WorkerTick, cfg.Telemetry.RequestTimeout, logger,
+			).WithReader(domain.RuntimeKindGantry, gantryAdapter)
+			telemetryWorker.WithReader(domain.RuntimeKindLangGraph, langSmithConnector)
 		}
 		logger.Info("postgres connected")
 	} else {
@@ -96,6 +121,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	if syncWorker != nil {
 		go syncWorker.Run(ctx)
+	}
+	if telemetryWorker != nil {
+		go telemetryWorker.Run(ctx)
 	}
 
 	srv := &http.Server{
@@ -134,4 +162,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	case <-time.After(100 * time.Millisecond):
 		return nil
 	}
+}
+
+func decimalFromConfig(value string) *domain.Decimal {
+	if value == "" {
+		return nil
+	}
+	decimal := domain.Decimal(value)
+	return &decimal
 }

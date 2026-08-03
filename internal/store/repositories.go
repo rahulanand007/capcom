@@ -166,7 +166,12 @@ func (r RuntimeConnectionRepository) Create(ctx context.Context, conn domain.Run
 		return domain.RuntimeConnection{}, fmt.Errorf("marshal runtime labels: %w", err)
 	}
 
-	if _, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("begin runtime connection creation: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runtime_connections (
 	id, name, display_name, environment, runtime_type, mode, status, endpoint, auth_ref,
 	metadata_json, labels_json, created_at, updated_at
@@ -175,17 +180,59 @@ INSERT INTO runtime_connections (
 		conn.BaseURL, conn.AuthRef, string(metadata), string(labels), conn.CreatedAt, conn.UpdatedAt); err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("create runtime connection: %w", err)
 	}
+	endpointID, err := newID()
+	if err != nil {
+		return domain.RuntimeConnection{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO runtime_connection_endpoints (
+	id, runtime_connection_id, endpoint, kind, auth_ref, created_by, reason, created_at, updated_at
+) VALUES ($1, $2, $3, 'canonical', NULLIF($4, ''), 'system', 'Canonical endpoint created with runtime instance', $5, $5)`,
+		endpointID, conn.ID, conn.BaseURL, conn.AuthRef, now); err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("create canonical runtime endpoint: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("commit runtime connection creation: %w", err)
+	}
+	conn.Endpoints = []domain.RuntimeEndpoint{{
+		ID: endpointID, RuntimeConnectionID: conn.ID, URL: conn.BaseURL,
+		Kind: domain.RuntimeEndpointCanonical, AuthRef: conn.AuthRef,
+		CreatedAt: now, UpdatedAt: now,
+	}}
 	return conn, nil
 }
 
-func (r RuntimeConnectionRepository) UpdateIdentity(ctx context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
+func (r RuntimeConnectionRepository) UpdateSettings(ctx context.Context, conn domain.RuntimeConnection) (domain.RuntimeConnection, error) {
 	labels, err := json.Marshal(conn.Labels)
 	if err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("marshal runtime labels: %w", err)
 	}
-	if _, err := r.db.ExecContext(ctx, `UPDATE runtime_connections SET display_name=$2, environment=$3,
-labels_json=$4::jsonb, updated_at=now() WHERE id=$1`, conn.ID, conn.DisplayName, conn.Environment, string(labels)); err != nil {
-		return domain.RuntimeConnection{}, fmt.Errorf("update runtime instance identity: %w", err)
+	metadata, err := json.Marshal(conn.Metadata)
+	if err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("marshal runtime metadata: %w", err)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("begin runtime settings update: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE runtime_connections SET
+display_name=$2, environment=$3, labels_json=$4::jsonb, mode=$5, endpoint=$6,
+auth_ref=NULLIF($7, ''), metadata_json=$8::jsonb, sync_enabled=$9,
+sync_interval_seconds=$10, updated_at=now()
+WHERE id=$1 AND archived_at IS NULL`, conn.ID, conn.DisplayName, conn.Environment, string(labels), conn.Mode,
+		conn.BaseURL, conn.AuthRef, string(metadata), conn.SyncEnabled, conn.SyncIntervalSeconds); err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("update runtime instance settings: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE runtime_connection_endpoints
+SET endpoint=$2, auth_ref=NULLIF($3, ''), updated_at=now()
+WHERE runtime_connection_id=$1 AND kind='canonical'`,
+		conn.ID, conn.BaseURL, conn.AuthRef); err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("update canonical runtime endpoint: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.RuntimeConnection{}, fmt.Errorf("commit runtime settings update: %w", err)
 	}
 	return r.Get(ctx, conn.ID)
 }
@@ -201,7 +248,7 @@ metadata_json, labels_json, created_at, updated_at, last_sync_at,
 sync_enabled, sync_interval_seconds, last_sync_status, last_sync_started_at, last_sync_finished_at,
 COALESCE(last_sync_duration_ms,0), last_error
 FROM runtime_connections
-WHERE id = $1`, id).Scan(
+WHERE id = $1 AND archived_at IS NULL`, id).Scan(
 		&conn.ID,
 		&conn.Name,
 		&conn.DisplayName,
@@ -247,6 +294,11 @@ WHERE id = $1`, id).Scan(
 	if err := json.Unmarshal(labels, &conn.Labels); err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("decode runtime labels: %w", err)
 	}
+	endpoints, err := r.listEndpoints(ctx, conn.ID)
+	if err != nil {
+		return domain.RuntimeConnection{}, err
+	}
+	conn.Endpoints = endpoints
 	return conn, nil
 }
 
@@ -257,6 +309,7 @@ metadata_json, labels_json, created_at, updated_at, last_sync_at,
 sync_enabled, sync_interval_seconds, last_sync_status, last_sync_started_at, last_sync_finished_at,
 COALESCE(last_sync_duration_ms,0), last_error
 FROM runtime_connections
+WHERE archived_at IS NULL
 ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list runtime connections: %w", err)
@@ -315,12 +368,130 @@ ORDER BY name`)
 		if err := json.Unmarshal(labels, &conn.Labels); err != nil {
 			return nil, fmt.Errorf("decode runtime labels: %w", err)
 		}
+		endpoints, err := r.listEndpoints(ctx, conn.ID)
+		if err != nil {
+			return nil, err
+		}
+		conn.Endpoints = endpoints
 		conns = append(conns, conn)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate runtime connections: %w", err)
 	}
 	return conns, nil
+}
+
+// Archive removes a runtime instance from active operation without deleting its
+// imported state, control history, or audit trail.
+func (r RuntimeConnectionRepository) Archive(ctx context.Context, id, actor, reason string) error {
+	result, err := r.db.ExecContext(ctx, `
+UPDATE runtime_connections
+SET archived_at = now(), archived_by = $2, archive_reason = $3,
+    archive_kind = 'removed', sync_enabled = false, status = 'disabled', updated_at = now()
+WHERE id = $1 AND archived_at IS NULL`, id, actor, reason)
+	if err != nil {
+		return fmt.Errorf("archive runtime connection: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("archive runtime connection rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("archive runtime connection: %w", sql.ErrNoRows)
+	}
+	return nil
+}
+
+func (r RuntimeConnectionRepository) listEndpoints(ctx context.Context, runtimeID string) ([]domain.RuntimeEndpoint, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, runtime_connection_id, endpoint, kind, COALESCE(auth_ref, ''),
+       COALESCE(source_runtime_connection_id::text, ''), created_at, updated_at
+FROM runtime_connection_endpoints
+WHERE runtime_connection_id=$1
+ORDER BY CASE kind WHEN 'canonical' THEN 0 WHEN 'alias' THEN 1 ELSE 2 END, created_at`, runtimeID)
+	if err != nil {
+		return nil, fmt.Errorf("list runtime endpoints: %w", err)
+	}
+	defer rows.Close()
+	endpoints := []domain.RuntimeEndpoint{}
+	for rows.Next() {
+		var endpoint domain.RuntimeEndpoint
+		if err := rows.Scan(
+			&endpoint.ID, &endpoint.RuntimeConnectionID, &endpoint.URL, &endpoint.Kind,
+			&endpoint.AuthRef, &endpoint.SourceRuntimeConnectionID, &endpoint.CreatedAt, &endpoint.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan runtime endpoint: %w", err)
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runtime endpoints: %w", err)
+	}
+	return endpoints, nil
+}
+
+// ConsolidateEndpoint converts an active duplicate runtime record into an
+// endpoint route owned by the canonical runtime. Imported state is retained on
+// the archived source record for audit and recovery.
+func (r RuntimeConnectionRepository) ConsolidateEndpoint(
+	ctx context.Context,
+	canonicalID, duplicateID string,
+	kind domain.RuntimeEndpointKind,
+	actor, reason string,
+) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin endpoint consolidation: %w", err)
+	}
+	defer tx.Rollback()
+
+	var canonicalKind, duplicateKind domain.RuntimeKind
+	var endpoint, authRef string
+	if err := tx.QueryRowContext(ctx, `
+SELECT runtime_type FROM runtime_connections
+WHERE id=$1 AND archived_at IS NULL FOR UPDATE`, canonicalID).Scan(&canonicalKind); err != nil {
+		return fmt.Errorf("get canonical runtime connection: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `
+SELECT runtime_type, endpoint, COALESCE(auth_ref, '') FROM runtime_connections
+WHERE id=$1 AND archived_at IS NULL FOR UPDATE`, duplicateID).Scan(&duplicateKind, &endpoint, &authRef); err != nil {
+		return fmt.Errorf("get duplicate runtime connection: %w", err)
+	}
+	if canonicalKind != duplicateKind {
+		return fmt.Errorf("runtime types must match")
+	}
+	endpointID, err := newID()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO runtime_connection_endpoints (
+	id, runtime_connection_id, endpoint, kind, auth_ref,
+	source_runtime_connection_id, created_by, reason
+) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8)`,
+		endpointID, canonicalID, endpoint, kind, authRef, duplicateID, actor, reason); err != nil {
+		return fmt.Errorf("create runtime endpoint alias: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE runtime_connections
+SET archived_at=now(), archived_by=$3, archive_reason=$4, archive_kind=$5,
+    merged_into_runtime_connection_id=$2, sync_enabled=false,
+    status='disabled', updated_at=now()
+WHERE id=$1 AND archived_at IS NULL`,
+		duplicateID, canonicalID, actor, reason, kind)
+	if err != nil {
+		return fmt.Errorf("archive duplicate runtime connection: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return fmt.Errorf("archive duplicate runtime connection rows affected: %w", err)
+		}
+		return fmt.Errorf("archive duplicate runtime connection: %w", sql.ErrNoRows)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit endpoint consolidation: %w", err)
+	}
+	return nil
 }
 
 func (r AgentRepository) Create(ctx context.Context, agent domain.Agent, binding domain.AgentBinding) (domain.Agent, domain.AgentBinding, error) {

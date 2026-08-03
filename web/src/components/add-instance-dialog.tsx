@@ -41,7 +41,6 @@ const ADAPTERS: AdapterOption[] = [
     id: "langgraph",
     name: "LangGraph",
     tokenLabel: "LangSmith API key",
-    readOnly: true,
   },
   {
     id: "temporal",

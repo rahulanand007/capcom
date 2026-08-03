@@ -146,6 +146,11 @@ After storing a secret and creating a `langgraph` runtime instance:
 7. A non-default test assistant can be deleted through
    `POST /v1/agents/{id}/actions/delete` after exact-ID confirmation.
 
+The default assistant generated for each configured graph reports
+`metadata.created_by=system`. LangGraph recreates it after deletion, so Capcom
+must label it as system-managed and reject delete requests before calling the
+adapter. Delete control applies only to user-created assistants.
+
 The 2026-07-21 live test imported one assistant and two execution records from
 a deterministic successful run.
 

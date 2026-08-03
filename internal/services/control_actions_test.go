@@ -221,6 +221,38 @@ func TestDeleteAgentRequiresExactConfirmationAndMarksTombstone(t *testing.T) {
 	}
 }
 
+func TestDeleteAgentRejectsLangGraphSystemManagedAssistant(t *testing.T) {
+	actions := &statusActionRepository{actions: map[string]domain.ControlAction{}}
+	adapter := &langGraphControlAdapter{}
+	agents := statusAgentRepository{detail: domain.PersistedAgentDetail{Agent: domain.PersistedAgent{
+		Agent: domain.Agent{
+			ID: "agent-1", Name: "Managed", Status: domain.AgentStatusEnabled,
+			Metadata: map[string]any{"assistant_metadata": map[string]any{"created_by": "system"}},
+		},
+		RuntimeConnectionID: "runtime-1",
+		RuntimeAgentID:      "assistant-1",
+	}}}
+	service := NewControlActionService(
+		statusRuntimeRepository{connection: domain.RuntimeConnection{
+			ID: "runtime-1", Kind: domain.RuntimeKindLangGraph, Mode: domain.RuntimeModeControlEnabled,
+		}},
+		agents,
+		actions,
+		nil,
+		nil,
+	).WithAdapter(adapter)
+
+	action, err := service.DeleteAgent(context.Background(), DeleteAgentInput{
+		AgentID: "agent-1", Confirmation: "assistant-1", Actor: "test", Reason: "retire", IdempotencyKey: "delete-system",
+	})
+	if err == nil {
+		t.Fatal("expected system-managed assistant rejection")
+	}
+	if action.Status != domain.ControlActionRejected || adapter.deleted != "" {
+		t.Fatalf("unexpected delete result: action=%#v deleted=%q", action, adapter.deleted)
+	}
+}
+
 func TestCancelExecutionInterruptsActiveRun(t *testing.T) {
 	actions := &statusActionRepository{actions: map[string]domain.ControlAction{}}
 	adapter := &langGraphControlAdapter{}

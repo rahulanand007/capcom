@@ -55,6 +55,8 @@ Implementation has started with the first backend slices:
   token and there is no login dialog.
 - In-console add-instance flow: adapter picker plus a credential form that stores the
   runtime secret and creates the runtime instance.
+- In-console adapter settings for per-instance identity, endpoint, control mode,
+  credential reference, labels, description, and automatic sync schedule.
 - Configurable CORS via `CAPCOM_CORS_ALLOWED_ORIGINS`, with preflight `OPTIONS` bypassing admin auth.
 - Docker Compose stack (Postgres + migrations + API + console).
 - Unit tests for config, API health, and CORS behavior.

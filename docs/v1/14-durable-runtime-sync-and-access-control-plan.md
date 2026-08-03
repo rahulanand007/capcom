@@ -379,6 +379,27 @@ Switch the normal table and detail drawer to persisted fleet endpoints. Show:
 - main, registered, or subagent relationship
 - persisted skills and effective access
 
+The fleet list is a topology projection over persisted agents and durable
+`agent_delegations`; it does not rewrite many-to-many delegation edges into
+`parent_runtime_agent_id`. Build and render the projection independently for
+each runtime instance using this deterministic order:
+
+1. main agents, ordered by name
+2. agents reachable from those mains, breadth-first and ordered by name
+3. standalone roots and their reachable delegates
+4. rootless/cyclic components, ordered by name and explicitly marked as cycles
+
+Render a durable agent once even when it has multiple orchestrators and show
+all incoming relationships as `Delegated by` labels. Indent reachable delegates
+and draw a connector from their displayed depth. Show unresolved delegate
+references on the orchestrator rather than inventing an agent row. Main,
+delegated, standalone, stale, and cycle state must remain visibly distinct.
+
+Fleet search matches agent, runtime, role, freshness, orchestrator, and
+unresolved-reference fields. When a delegate matches, retain every transitive
+orchestrator as dimmed context so a filtered result never loses its delegation
+provenance. Cycles must be guarded by visited-node tracking.
+
 Keep a separate live inspection command for diagnostics rather than mixing live
 and cached values in one response.
 
@@ -478,6 +499,8 @@ Normal tests must not require a live Gantry server.
 
 - manual sync success, failure, conflict, auth, and validation
 - persisted fleet filtering and freshness fields
+- fleet topology ordering for multiple mains, cycles, unresolved delegates,
+  multiple orchestrators, and ancestor-preserving search
 - stale data remains readable after adapter failure
 - control request actor/reason/idempotency requirements
 - secrets and authorization headers never appear in responses

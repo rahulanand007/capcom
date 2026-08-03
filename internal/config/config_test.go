@@ -122,6 +122,23 @@ func TestLoadFromLookupRejectsInvalidDuration(t *testing.T) {
 	}
 }
 
+func TestLoadFromLookupParsesModelCatalog(t *testing.T) {
+	cfg, err := LoadFromLookup(func(key string) (string, bool) {
+		if key == "CAPCOM_MODEL_CATALOG_JSON" {
+			return `[{"provider":"test","model":"model-1","context_window_tokens":128000,"input_cost_per_1m_tokens_usd":"2.5","output_cost_per_1m_tokens_usd":"10","version":"2026-07-29"}]`, true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Telemetry.ModelCatalog) != 1 ||
+		cfg.Telemetry.ModelCatalog[0].ContextWindowTokens != 128000 ||
+		cfg.Telemetry.ModelCatalog[0].InputCostPer1MTokensUSD != "2.5" {
+		t.Fatalf("unexpected model catalog: %#v", cfg.Telemetry.ModelCatalog)
+	}
+}
+
 func TestLoadUsesDotEnvAndAllowsOSEnvOverride(t *testing.T) {
 	previousDir, err := os.Getwd()
 	if err != nil {

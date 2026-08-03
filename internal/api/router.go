@@ -24,6 +24,13 @@ type RouterConfig struct {
 	Secrets            SecretService
 	RuntimeSync        RuntimeSyncService
 	ControlActions     ControlActionService
+	Telemetry          TelemetryService
+}
+
+type TelemetryService interface {
+	Summary(ctx context.Context, query domain.UsageQuery) (domain.UsageSummary, error)
+	Health(ctx context.Context, runtimeID string) (domain.TelemetryIngestionRun, error)
+	Ingest(ctx context.Context, observations []domain.UsageObservation) (accepted, rejected, deduplicated int64, err error)
 }
 
 type ControlActionService interface {
@@ -49,7 +56,9 @@ type RuntimeSyncService interface {
 
 type RuntimeConnectionService interface {
 	Create(ctx context.Context, input services.CreateRuntimeConnectionInput) (domain.RuntimeConnection, error)
-	UpdateIdentity(ctx context.Context, input services.UpdateRuntimeInstanceIdentityInput) (domain.RuntimeConnection, error)
+	UpdateSettings(ctx context.Context, input services.UpdateRuntimeInstanceSettingsInput) (domain.RuntimeConnection, error)
+	Remove(ctx context.Context, input services.RemoveRuntimeInstanceInput) error
+	ConsolidateEndpoint(ctx context.Context, input services.ConsolidateRuntimeEndpointInput) (domain.RuntimeConnection, error)
 	Get(ctx context.Context, id string) (domain.RuntimeConnection, error)
 	List(ctx context.Context) ([]domain.RuntimeConnection, error)
 	Test(ctx context.Context, id string) (*runtimeadapter.CheckResult, error)
@@ -84,7 +93,8 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/runtime-connections", handleCreateRuntimeConnection(cfg))
 	mux.HandleFunc("GET /v1/runtime-connections", handleListRuntimeConnections(cfg))
 	mux.HandleFunc("GET /v1/runtime-connections/{id}", handleGetRuntimeConnection(cfg))
-	mux.HandleFunc("PATCH /v1/runtime-connections/{id}", handleUpdateRuntimeInstanceIdentity(cfg))
+	mux.HandleFunc("PATCH /v1/runtime-connections/{id}", handleUpdateRuntimeInstanceSettings(cfg))
+	mux.HandleFunc("DELETE /v1/runtime-connections/{id}", handleRemoveRuntimeInstance(cfg))
 	mux.HandleFunc("POST /v1/runtime-connections/{id}/test", handleTestRuntimeConnection(cfg))
 	mux.HandleFunc("GET /v1/runtime-connections/{id}/agents", handleListRuntimeAgents(cfg))
 	mux.HandleFunc("GET /v1/runtime-connections/{id}/agents/{agentID}/skills", handleListRuntimeAgentSkills(cfg))
@@ -97,6 +107,7 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/agents/{id}/skills", handleGetPersistedAgentSkills(cfg))
 	mux.HandleFunc("GET /v1/agents/{id}/access", handleGetPersistedAgentAccess(cfg))
 	mux.HandleFunc("GET /v1/agents/{id}/delegations", handleListAgentDelegations(cfg))
+	mux.HandleFunc("GET /v1/agents/{id}/metrics", handleAgentMetrics(cfg))
 	mux.HandleFunc("GET /v1/subagent-executions", handleListSubagentExecutions(cfg))
 	mux.HandleFunc("GET /v1/runtime-executions", handleListRuntimeExecutions(cfg))
 	// Runtime instances are the user-facing connection boundary. The older
@@ -104,7 +115,9 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/runtime-instances", handleCreateRuntimeConnection(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances", handleListRuntimeConnections(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}", handleGetRuntimeConnection(cfg))
-	mux.HandleFunc("PATCH /v1/runtime-instances/{id}", handleUpdateRuntimeInstanceIdentity(cfg))
+	mux.HandleFunc("PATCH /v1/runtime-instances/{id}", handleUpdateRuntimeInstanceSettings(cfg))
+	mux.HandleFunc("DELETE /v1/runtime-instances/{id}", handleRemoveRuntimeInstance(cfg))
+	mux.HandleFunc("POST /v1/runtime-instances/{id}/endpoints/consolidate", handleConsolidateRuntimeEndpoint(cfg))
 	mux.HandleFunc("POST /v1/runtime-instances/{id}/test", handleTestRuntimeConnection(cfg))
 	mux.HandleFunc("POST /v1/runtime-instances/{id}/sync", handleSyncRuntime(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/sync-runs", handleListSyncRuns(cfg))
@@ -115,6 +128,8 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/inventory", handleListRuntimeInventory(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/capabilities", handleListRuntimeCapabilities(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/agent-delegations", handleListInstanceAgentDelegations(cfg))
+	mux.HandleFunc("GET /v1/runtime-instances/{id}/metrics", handleRuntimeMetrics(cfg))
+	mux.HandleFunc("GET /v1/runtime-instances/{id}/telemetry-health", handleTelemetryHealth(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/live/agents", handleListRuntimeAgents(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/live/agents/{agentID}/skills", handleListRuntimeAgentSkills(cfg))
 	mux.HandleFunc("GET /v1/runtime-instances/{id}/live/agents/{agentID}/access", handleGetRuntimeAgentAccess(cfg))
@@ -122,9 +137,12 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/agents/{id}/actions/set-status", handleSetAgentStatus(cfg))
 	mux.HandleFunc("POST /v1/agents/{id}/actions/delete", handleDeleteAgent(cfg))
 	mux.HandleFunc("POST /v1/runtime-executions/{id}/actions/cancel", handleCancelExecution(cfg))
+	mux.HandleFunc("GET /v1/metrics/summary", handleMetricsSummary(cfg))
+	mux.HandleFunc("POST /v1/telemetry/otlp/v1/traces", handleOTLPTraces(cfg))
 	mux.HandleFunc("/", handleNotFound)
 
-	return requestLogger(corsMiddleware(adminAuth(mux, cfg.AdminToken), cfg.AllowedOrigins), logger)
+	handler := corsMiddleware(adminAuth(mux, cfg.AdminToken), cfg.AllowedOrigins)
+	return requestLogger(recoverMiddleware(handler, logger), logger)
 }
 
 func serveConsole(ui fs.FS) http.HandlerFunc {
@@ -280,18 +298,81 @@ func handleGetRuntimeConnection(cfg RouterConfig) http.HandlerFunc {
 	}
 }
 
-func handleUpdateRuntimeInstanceIdentity(cfg RouterConfig) http.HandlerFunc {
+func handleUpdateRuntimeInstanceSettings(cfg RouterConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if cfg.RuntimeConnections == nil {
 			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database_not_configured"})
 			return
 		}
-		var req updateRuntimeInstanceIdentityRequest
+		var req updateRuntimeInstanceSettingsRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
 			return
 		}
-		conn, err := cfg.RuntimeConnections.UpdateIdentity(r.Context(), services.UpdateRuntimeInstanceIdentityInput{ID: r.PathValue("id"), DisplayName: req.DisplayName, Environment: req.Environment, Labels: req.Labels, Actor: req.Actor, Reason: req.Reason})
+		conn, err := cfg.RuntimeConnections.UpdateSettings(r.Context(), services.UpdateRuntimeInstanceSettingsInput{
+			ID: r.PathValue("id"), DisplayName: req.DisplayName, Environment: req.Environment,
+			Labels: req.Labels, Mode: domain.RuntimeMode(req.Mode), Endpoint: req.Endpoint,
+			AuthRef: req.AuthRef, Description: req.Description, SyncEnabled: req.SyncEnabled,
+			SyncIntervalSeconds: req.SyncIntervalSeconds, Actor: req.Actor, Reason: req.Reason,
+		})
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, sql.ErrNoRows) {
+				status = http.StatusNotFound
+			}
+			writeJSON(w, status, errorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, runtimeConnectionResponseFromDomain(conn))
+	}
+}
+
+func handleRemoveRuntimeInstance(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.RuntimeConnections == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database_not_configured"})
+			return
+		}
+		var req removeRuntimeInstanceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+			return
+		}
+		err := cfg.RuntimeConnections.Remove(r.Context(), services.RemoveRuntimeInstanceInput{
+			ID: r.PathValue("id"), Confirmation: req.Confirmation,
+			Actor: req.Actor, Reason: req.Reason,
+		})
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, sql.ErrNoRows) {
+				status = http.StatusNotFound
+			}
+			writeJSON(w, status, errorResponse{Error: err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleConsolidateRuntimeEndpoint(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.RuntimeConnections == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database_not_configured"})
+			return
+		}
+		var req consolidateRuntimeEndpointRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+			return
+		}
+		conn, err := cfg.RuntimeConnections.ConsolidateEndpoint(r.Context(), services.ConsolidateRuntimeEndpointInput{
+			CanonicalID:  r.PathValue("id"),
+			DuplicateID:  req.DuplicateRuntimeInstanceID,
+			Kind:         domain.RuntimeEndpointKind(req.Kind),
+			Confirmation: req.Confirmation,
+			Actor:        req.Actor,
+			Reason:       req.Reason,
+		})
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, sql.ErrNoRows) {
@@ -396,6 +477,12 @@ func handleListRuntimeAgentSkills(cfg RouterConfig) http.HandlerFunc {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	if failure, ok := value.(errorResponse); ok {
+		if status >= http.StatusInternalServerError {
+			slog.Default().Warn("api request failed", "status", status, "technical_error", failure.Error)
+		}
+		value = publicError(status, failure.Error)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
@@ -427,12 +514,32 @@ type createRuntimeConnectionRequest struct {
 	AuthRef     string            `json:"auth_ref"`
 }
 
-type updateRuntimeInstanceIdentityRequest struct {
-	DisplayName string            `json:"display_name"`
-	Environment string            `json:"environment"`
-	Labels      map[string]string `json:"labels"`
-	Actor       string            `json:"actor"`
-	Reason      string            `json:"reason"`
+type updateRuntimeInstanceSettingsRequest struct {
+	DisplayName         string            `json:"display_name"`
+	Environment         string            `json:"environment"`
+	Labels              map[string]string `json:"labels"`
+	Mode                string            `json:"mode"`
+	Endpoint            string            `json:"endpoint"`
+	AuthRef             string            `json:"auth_ref"`
+	Description         string            `json:"description"`
+	SyncEnabled         bool              `json:"sync_enabled"`
+	SyncIntervalSeconds int               `json:"sync_interval_seconds"`
+	Actor               string            `json:"actor"`
+	Reason              string            `json:"reason"`
+}
+
+type removeRuntimeInstanceRequest struct {
+	Confirmation string `json:"confirmation"`
+	Actor        string `json:"actor"`
+	Reason       string `json:"reason"`
+}
+
+type consolidateRuntimeEndpointRequest struct {
+	DuplicateRuntimeInstanceID string `json:"duplicate_runtime_instance_id"`
+	Kind                       string `json:"kind"`
+	Confirmation               string `json:"confirmation"`
+	Actor                      string `json:"actor"`
+	Reason                     string `json:"reason"`
 }
 
 type storeSecretRequest struct {
@@ -450,27 +557,38 @@ type secretResponse struct {
 }
 
 type runtimeConnectionResponse struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	DisplayName         string            `json:"display_name"`
-	Environment         string            `json:"environment"`
-	Labels              map[string]string `json:"labels"`
-	Description         string            `json:"description,omitempty"`
-	RuntimeType         string            `json:"runtime_type"`
-	Mode                string            `json:"mode"`
-	Status              string            `json:"status"`
-	Endpoint            string            `json:"endpoint"`
-	AuthRef             string            `json:"auth_ref"`
-	LastSyncedAt        *string           `json:"last_synced_at,omitempty"`
-	CreatedAt           string            `json:"created_at"`
-	UpdatedAt           string            `json:"updated_at"`
-	SyncEnabled         bool              `json:"sync_enabled"`
-	SyncIntervalSeconds int               `json:"sync_interval_seconds"`
-	LastSyncStatus      string            `json:"last_sync_status,omitempty"`
-	LastSyncStartedAt   *string           `json:"last_sync_started_at,omitempty"`
-	LastSyncFinishedAt  *string           `json:"last_sync_finished_at,omitempty"`
-	LastSyncDurationMS  int64             `json:"last_sync_duration_ms,omitempty"`
-	LastError           string            `json:"last_error,omitempty"`
+	ID                  string                    `json:"id"`
+	Name                string                    `json:"name"`
+	DisplayName         string                    `json:"display_name"`
+	Environment         string                    `json:"environment"`
+	Labels              map[string]string         `json:"labels"`
+	Description         string                    `json:"description,omitempty"`
+	RuntimeType         string                    `json:"runtime_type"`
+	Mode                string                    `json:"mode"`
+	Status              string                    `json:"status"`
+	Endpoint            string                    `json:"endpoint"`
+	AuthRef             string                    `json:"auth_ref"`
+	LastSyncedAt        *string                   `json:"last_synced_at,omitempty"`
+	CreatedAt           string                    `json:"created_at"`
+	UpdatedAt           string                    `json:"updated_at"`
+	SyncEnabled         bool                      `json:"sync_enabled"`
+	SyncIntervalSeconds int                       `json:"sync_interval_seconds"`
+	LastSyncStatus      string                    `json:"last_sync_status,omitempty"`
+	LastSyncStartedAt   *string                   `json:"last_sync_started_at,omitempty"`
+	LastSyncFinishedAt  *string                   `json:"last_sync_finished_at,omitempty"`
+	LastSyncDurationMS  int64                     `json:"last_sync_duration_ms,omitempty"`
+	LastError           string                    `json:"last_error,omitempty"`
+	Endpoints           []runtimeEndpointResponse `json:"endpoints"`
+}
+
+type runtimeEndpointResponse struct {
+	ID                        string `json:"id"`
+	Endpoint                  string `json:"endpoint"`
+	Kind                      string `json:"kind"`
+	AuthRef                   string `json:"auth_ref"`
+	SourceRuntimeConnectionID string `json:"source_runtime_instance_id,omitempty"`
+	CreatedAt                 string `json:"created_at"`
+	UpdatedAt                 string `json:"updated_at"`
 }
 
 type runtimeConnectionTestResponse struct {
@@ -534,6 +652,18 @@ func runtimeConnectionResponseFromDomain(conn domain.RuntimeConnection) runtimeC
 		lastSyncFinishedAt = &value
 	}
 
+	endpoints := make([]runtimeEndpointResponse, 0, len(conn.Endpoints))
+	for _, endpoint := range conn.Endpoints {
+		endpoints = append(endpoints, runtimeEndpointResponse{
+			ID:                        endpoint.ID,
+			Endpoint:                  endpoint.URL,
+			Kind:                      string(endpoint.Kind),
+			AuthRef:                   endpoint.AuthRef,
+			SourceRuntimeConnectionID: endpoint.SourceRuntimeConnectionID,
+			CreatedAt:                 endpoint.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:                 endpoint.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+	}
 	return runtimeConnectionResponse{
 		ID:                  conn.ID,
 		Name:                conn.Name,
@@ -556,6 +686,7 @@ func runtimeConnectionResponseFromDomain(conn domain.RuntimeConnection) runtimeC
 		LastSyncFinishedAt:  lastSyncFinishedAt,
 		LastSyncDurationMS:  conn.LastSyncDurationMS,
 		LastError:           conn.LastError,
+		Endpoints:           endpoints,
 	}
 }
 

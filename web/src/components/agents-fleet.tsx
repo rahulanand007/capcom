@@ -19,16 +19,20 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  useFleetAgentDelegationsQuery,
   usePersistedAgentsQuery,
   useRuntimeInstancesQuery,
   useSubagentExecutionsQuery,
 } from "@/lib/api-hooks"
 import type {
   PersistedAgent,
-  RuntimeInstance,
   SubagentExecution,
 } from "@/lib/api-types"
 import { relativeTime } from "@/lib/adapters"
+import {
+  buildAgentTopology,
+  filterAgentTopology,
+} from "@/lib/agent-topology"
 import { cn } from "@/lib/utils"
 
 export function AgentsFleet() {
@@ -47,11 +51,24 @@ export function AgentsFleet() {
     () => agentsQuery.data ?? [],
     [agentsQuery.data]
   )
-  const filteredAgents = React.useMemo(
-    () => filterAgents(agents, instances, query),
-    [agents, instances, query]
+  const instanceIDs = React.useMemo(
+    () => instances.map((instance) => instance.id),
+    [instances]
   )
-  const loading = runtimeInstancesQuery.isLoading || agentsQuery.isLoading
+  const delegationsQuery = useFleetAgentDelegationsQuery(instanceIDs)
+  const topology = React.useMemo(
+    () =>
+      buildAgentTopology(agents, delegationsQuery.data, instances),
+    [agents, delegationsQuery.data, instances]
+  )
+  const filteredTopology = React.useMemo(
+    () => filterAgentTopology(topology, instances, query),
+    [topology, instances, query]
+  )
+  const loading =
+    runtimeInstancesQuery.isLoading ||
+    agentsQuery.isLoading ||
+    delegationsQuery.isLoading
 
   return (
     <section className="flex flex-col gap-5">
@@ -75,11 +92,20 @@ export function AgentsFleet() {
         </div>
       </div>
 
+      {delegationsQuery.isError ? (
+        <div
+          role="status"
+          className="rounded-lg border border-[var(--wnd)] bg-[var(--wnd)] px-4 py-3 text-[12px] text-[var(--wn)]"
+        >
+          Delegation relationships could not be loaded. Showing role-based agent ordering until the next refresh.
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-xl border border-[var(--hl)] bg-[var(--el)] shadow-[var(--chi)]">
         <Table className="table-fixed">
           <colgroup>
-            <col className="w-[28%]" />
-            <col className="w-[27%]" />
+            <col className="w-[34%]" />
+            <col className="w-[21%]" />
             <col className="w-[10%]" />
             <col className="w-[25%]" />
             <col className="w-[10%]" />
@@ -100,12 +126,13 @@ export function AgentsFleet() {
           <TableBody>
             {loading ? (
               <FleetSkeletonRows />
-            ) : filteredAgents.length ? (
-              filteredAgents.map((agent) => (
+            ) : filteredTopology.length ? (
+              filteredTopology.map((row) => (
                 <AgentTableRow
-                  key={agent.id}
-                  agent={agent}
-                  location={locationForAgent(agent, instances)}
+                  key={row.agent.id}
+                  agent={row.agent}
+                  topology={row}
+                  location={locationForAgent(row.agent, instances)}
                   onAgentClick={setSelectedAgent}
                 />
               ))
@@ -122,7 +149,7 @@ export function AgentsFleet() {
           </TableBody>
         </Table>
         <div className="border-t border-[var(--sl)] px-[18px] py-3 font-hud text-[12px] text-[var(--fa)]">
-          Showing {filteredAgents.length} of {agents.length} agents - the full list loads from each runtime snapshot.
+          Showing {filteredTopology.length} of {agents.length} agents - delegated agents follow their orchestrator and search retains ancestor context.
         </div>
       </div>
 
@@ -143,32 +170,6 @@ export function AgentsFleet() {
       />
     </section>
   )
-}
-
-function filterAgents(
-  agents: PersistedAgent[],
-  instances: RuntimeInstance[],
-  query: string
-) {
-  const needle = query.trim().toLowerCase()
-  if (!needle) {
-    return agents
-  }
-
-  return agents.filter((agent) => {
-    const location = locationForAgent(agent, instances)
-    return [
-      agent.name,
-      agent.runtime_agent_id,
-      agent.kind,
-      agent.status,
-      location.adapterName,
-      location.instanceName,
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(needle)
-  })
 }
 
 function FleetSkeletonRows() {

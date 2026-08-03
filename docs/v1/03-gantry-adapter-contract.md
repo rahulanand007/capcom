@@ -14,13 +14,33 @@ Gantry can be reached by:
 
 Capcom V1 should implement base URL first. Socket transport can be added behind the same adapter interface.
 
+## Future Required Installation Identity
+
+Gantry must expose a stable, opaque installation identifier in
+`GET /v1/health` (proposed field: `installationId`). This is a required future
+runtime contract, not a Capcom-generated value. The identifier must:
+
+- remain stable across Gantry process and host restarts
+- be shared by every listener, hostname, and relay serving that installation
+- differ for separately deployed Gantry installations
+- be regenerated when an installation is cloned as a new independent runtime
+- contain no secret or mutable network information
+
+Once available, Capcom will identify a Gantry runtime by
+`(runtime_type, installationId)` and automatically attach newly observed URLs as
+endpoint aliases. Until then, Capcom keeps one operator-selected canonical
+instance, prevents exact endpoint duplication, and requires an audited explicit
+consolidation for hostname aliases and relays. Matching agents, skills, health
+payloads, databases, or process roles are diagnostic evidence only and must not
+trigger an automatic merge.
+
 ## Auth
 
 Use Gantry Control API keys. V1 should support two connection modes:
 
 | Mode | Required Scopes |
 |---|---|
-| read_only | `sessions:read`, `agents:admin`, `jobs:read`, `skills:read`, `mcp:read` |
+| read_only | `sessions:read`, `agents:admin`, `jobs:read`, `skills:read`, `mcp:read`, `usage:read` |
 | control_enabled | read-only scopes plus `jobs:write`, `skills:admin`, `mcp:admin` |
 
 Gantry currently uses `agents:admin` for agent inventory and access reads, so read-only mode is "no mutation scopes" rather than purely read-named scopes.

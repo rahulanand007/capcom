@@ -28,4 +28,15 @@ func TestLoadMigrations(t *testing.T) {
 	if len(migrations) < 5 || !strings.Contains(migrations[4].SQL, "ADD COLUMN IF NOT EXISTS display_name") {
 		t.Fatal("runtime instance identity migration is missing")
 	}
+	telemetryFound := false
+	for _, migration := range migrations {
+		if strings.Contains(migration.SQL, "CREATE TABLE IF NOT EXISTS usage_observations") &&
+			strings.Contains(migration.SQL, "CREATE TABLE IF NOT EXISTS telemetry_ingestion_runs") {
+			telemetryFound = true
+			break
+		}
+	}
+	if !telemetryFound {
+		t.Fatal("telemetry migration is missing")
+	}
 }
