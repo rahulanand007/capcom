@@ -13,14 +13,18 @@ import { toast } from "sonner"
 import { AppShell } from "@/components/app-shell"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { ApiError } from "@/lib/api-client"
+import { toUserFacingError } from "@/lib/errors"
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   const [queryClient] = React.useState(
     () =>
       new QueryClient({
         queryCache: new QueryCache({
-          onError: showRequestError,
+          onError: (error, query) => {
+            if (query.state.data === undefined) {
+              showRequestError(error)
+            }
+          },
         }),
         mutationCache: new MutationCache({
           onError: showRequestError,
@@ -33,6 +37,19 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         },
       })
   )
+
+  React.useEffect(() => {
+    const onWindowError = () =>
+      showRequestError(new Error("unexpected client error"))
+    const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+      showRequestError(event.reason)
+    window.addEventListener("error", onWindowError)
+    window.addEventListener("unhandledrejection", onUnhandledRejection)
+    return () => {
+      window.removeEventListener("error", onWindowError)
+      window.removeEventListener("unhandledrejection", onUnhandledRejection)
+    }
+  }, [])
 
   return (
     <ThemeProvider
@@ -52,13 +69,8 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 }
 
 function showRequestError(error: unknown) {
-  if (error instanceof ApiError) {
-    toast.error(error.message)
-    return
-  }
-  if (error instanceof Error) {
-    toast.error(error.message)
-    return
-  }
-  toast.error("Request failed")
+  const failure = toUserFacingError(error)
+  toast.error(failure.title, {
+    description: failure.message,
+  })
 }

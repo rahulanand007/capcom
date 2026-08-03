@@ -14,7 +14,7 @@ Implementation has started with the first backend slices:
 - `GET /healthz` endpoint.
 - Runtime-neutral domain shell.
 - Runtime adapter interface for Gantry and future adapters.
-- LangGraph Agent Server read-only adapter with `X-Api-Key` authentication.
+- LangGraph Agent Server read/control adapter with `X-Api-Key` authentication.
 - `.env` loading for local development.
 - OpenAPI contract at `api/openapi.yaml`.
 - Postgres configuration.
@@ -47,16 +47,20 @@ Implementation has started with the first backend slices:
 - Sync history and database-backed overlap protection.
 - Audited, idempotent access reconciliation with read-only rejection and dry-run validation.
 - Audited Gantry agent enable/disable actions with dry-run validation and post-action verification sync.
+- Audited LangGraph assistant deletion with exact-ID confirmation and retained Capcom tombstones.
+- Audited LangGraph run cancellation using interrupt semantics with post-action verification sync.
 - Next.js + shadcn/ui operator console in `web/` (dark-first with a light theme), a
   separate frontend that calls the Go API.
 - Server-side API proxy in the console injects the admin token, so the browser needs no
   token and there is no login dialog.
 - In-console add-instance flow: adapter picker plus a credential form that stores the
   runtime secret and creates the runtime instance.
+- In-console adapter settings for per-instance identity, endpoint, control mode,
+  credential reference, labels, description, and automatic sync schedule.
 - Configurable CORS via `CAPCOM_CORS_ALLOWED_ORIGINS`, with preflight `OPTIONS` bypassing admin auth.
 - Docker Compose stack (Postgres + migrations + API + console).
 - Unit tests for config, API health, and CORS behavior.
-- Post-V1 signed Gantry webhook receiver documented; the LangGraph Agent Server read-only adapter is implemented and live-tested.
+- Post-V1 signed Gantry webhook receiver documented; the LangGraph Agent Server read/control adapter is implemented and live-tested.
 - Generic persisted runtime executions with instance, agent, kind, and parent filtering.
 
 The next implementation slice is desired-state manifest apply followed by drift
@@ -163,10 +167,12 @@ host.
 
 Local LangGraph Agent Server instances use the same host-gateway pattern. Start
 the deterministic fixture in `examples/langgraph-agent-server` on port `2024`,
-then register `http://langgraph.internal:2024` as a read-only `langgraph`
-runtime. Local `langgraph dev` has no-op authentication, so use a non-empty
-local-only secret placeholder; hosted deployments require a real LangSmith API
-key. See the [LangGraph adapter contract](docs/v1/17-langgraph-agent-server-adapter.md).
+then register `http://langgraph.internal:2024` as a `langgraph` runtime. Use
+`read_only` for inventory only or `control_enabled` to allow assistant deletion
+and active-run cancellation. Local `langgraph dev` has no-op authentication, so
+use a non-empty local-only secret placeholder; hosted deployments require a
+real LangSmith API key. See the
+[LangGraph adapter contract](docs/v1/17-langgraph-agent-server-adapter.md).
 
 Health check:
 

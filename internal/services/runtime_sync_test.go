@@ -66,6 +66,12 @@ func (snapshotAdapter) ReplaceAgentAccess(context.Context, domain.RuntimeConnect
 func (snapshotAdapter) SetAgentStatus(context.Context, domain.RuntimeConnection, string, domain.AgentStatus) (*domain.AgentSnapshot, error) {
 	return &domain.AgentSnapshot{}, nil
 }
+func (snapshotAdapter) DeleteAgent(context.Context, domain.RuntimeConnection, string) error {
+	return nil
+}
+func (snapshotAdapter) CancelExecution(context.Context, domain.RuntimeConnection, domain.RuntimeExecutionSnapshot) error {
+	return nil
+}
 func (a snapshotAdapter) CollectSnapshot(context.Context, domain.RuntimeConnection) (*domain.RuntimeSnapshot, error) {
 	if a.err != nil {
 		return nil, a.err
@@ -113,12 +119,16 @@ func (*fakeSyncStore) ListPersistedAgents(context.Context, string) ([]domain.Per
 func (*fakeSyncStore) GetPersistedAgent(context.Context, string) (domain.PersistedAgentDetail, error) {
 	return domain.PersistedAgentDetail{}, nil
 }
+func (*fakeSyncStore) MarkAgentDeleted(context.Context, string) error { return nil }
 func (*fakeSyncStore) ListSubagentExecutions(context.Context, string, string) ([]domain.PersistedSubagentExecution, error) {
 	return nil, nil
 }
 
 func (*fakeSyncStore) ListRuntimeExecutions(context.Context, string, string, string, int) ([]domain.PersistedRuntimeExecution, error) {
 	return nil, nil
+}
+func (*fakeSyncStore) GetRuntimeExecution(context.Context, string) (domain.PersistedRuntimeExecution, error) {
+	return domain.PersistedRuntimeExecution{}, nil
 }
 func (*fakeSyncStore) ListRuntimeDiagnostics(context.Context, string) ([]domain.PersistedRuntimeDiagnostic, error) {
 	return nil, nil

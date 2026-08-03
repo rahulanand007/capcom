@@ -9,6 +9,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { PersistedAgent, RuntimeInstance } from "@/lib/api-types"
+import type { AgentTopologyRow } from "@/lib/agent-topology"
 import {
   useAgentAccessQuery,
   useAgentSkillsQuery,
@@ -24,12 +25,14 @@ export type AgentLocation = {
 type AgentTableRowProps = {
   agent: PersistedAgent
   location?: AgentLocation
+  topology?: AgentTopologyRow
   onAgentClick?: (agent: PersistedAgent) => void
 }
 
 export function AgentTableRow({
   agent,
   location,
+  topology,
   onAgentClick,
 }: AgentTableRowProps) {
   return (
@@ -39,7 +42,7 @@ export function AgentTableRow({
       onClick={() => onAgentClick?.(agent)}
     >
       <TableCell className="min-w-[220px] px-[18px] py-3 whitespace-normal">
-        <AgentIdentity agent={agent} />
+        <AgentIdentity agent={agent} topology={topology} />
       </TableCell>
       {location ? (
         <TableCell className="min-w-[220px] px-[18px] py-3 whitespace-normal">
@@ -61,16 +64,105 @@ export function AgentTableRow({
   )
 }
 
-export function AgentIdentity({ agent }: { agent: PersistedAgent }) {
+export function AgentIdentity({
+  agent,
+  topology,
+}: {
+  agent: PersistedAgent
+  topology?: AgentTopologyRow
+}) {
+  const depth = Math.min(topology?.depth ?? 0, 4)
+  const visibleOrchestrators = topology?.delegatedBy.slice(0, 2) ?? []
+
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <span className="truncate font-hud text-[13px] font-medium text-[var(--tx)]">
-        {agent.name}
-      </span>
-      <span className="truncate font-hud text-[11px] text-[var(--fa)]">
-        {agent.runtime_agent_id}
-      </span>
+    <div
+      className={cn(
+        "flex min-w-0 items-stretch",
+        topology?.contextOnly && "opacity-65"
+      )}
+      data-topology-role={topology?.role}
+      data-topology-depth={topology?.depth}
+    >
+      {depth > 0 ? (
+        <div
+          aria-hidden="true"
+          className="flex shrink-0 items-start pt-0.5 font-hud text-[12px] text-[var(--fa)]"
+        >
+          {Array.from({ length: depth }).map((_, index) => (
+            <span key={index} className="inline-block w-[18px] text-center">
+              {index === depth - 1 ? "└─" : "│"}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-hud text-[13px] font-medium text-[var(--tx)]">
+            {agent.name}
+          </span>
+          {topology?.contextOnly ? (
+            <span className="font-hud text-[10px] text-[var(--fa)]">context</span>
+          ) : null}
+        </div>
+        <span className="truncate font-hud text-[11px] text-[var(--fa)]">
+          {agent.runtime_agent_id}
+        </span>
+        {topology ? (
+          <div className="flex min-w-0 flex-wrap gap-1">
+            <TopologyBadge role={topology.role} />
+            {visibleOrchestrators.map((orchestrator) => (
+              <Badge
+                key={orchestrator.id}
+                variant="outline"
+                title={`Delegated by ${orchestrator.name}`}
+                className="max-w-[170px] border-[var(--hl)] bg-[var(--sl)] font-hud text-[10px] text-[var(--mu)]"
+              >
+                <span className="truncate">Delegated by {orchestrator.name}</span>
+              </Badge>
+            ))}
+            {(topology.delegatedBy.length ?? 0) > visibleOrchestrators.length ? (
+              <Badge
+                variant="outline"
+                className="border-[var(--hl)] bg-[var(--sl)] font-hud text-[10px] text-[var(--fa)]"
+              >
+                +{topology.delegatedBy.length - visibleOrchestrators.length} orchestrator
+                {topology.delegatedBy.length - visibleOrchestrators.length === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
+            {topology.unresolvedDelegations.length ? (
+              <Badge
+                variant="outline"
+                title={topology.unresolvedDelegations
+                  .map((item) => item.display_name || item.delegate_ref)
+                  .join(", ")}
+                className="border-[var(--wnd)] bg-[var(--wnd)] font-hud text-[10px] text-[var(--wn)]"
+              >
+                {topology.unresolvedDelegations.length} unresolved
+              </Badge>
+            ) : null}
+            {topology.inCycle ? (
+              <Badge className="bg-[var(--wnd)] font-hud text-[10px] text-[var(--wn)]">
+                cycle
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
+  )
+}
+
+function TopologyBadge({ role }: { role: AgentTopologyRow["role"] }) {
+  const className =
+    role === "main"
+      ? "border-[var(--ac)] bg-[var(--acd)] text-[var(--ac)]"
+      : role === "delegated"
+        ? "border-[var(--hl)] bg-[var(--sl)] text-[var(--mu)]"
+        : "border-[var(--hl)] bg-transparent text-[var(--fa)]"
+  return (
+    <Badge variant="outline" className={cn("font-hud text-[10px]", className)}>
+      {role}
+    </Badge>
   )
 }
 
@@ -137,6 +229,8 @@ export function AgentStatusPill({ agent }: { agent: PersistedAgent }) {
   const className =
     status === "running"
       ? "bg-[var(--acd)] text-[var(--ac)]"
+      : status === "managed"
+        ? "bg-[var(--sl)] text-[var(--tx)]"
       : status === "failed"
         ? "bg-[var(--dgd)] text-[var(--dg)]"
         : "bg-[var(--sl)] text-[var(--fa)]"
@@ -165,16 +259,44 @@ export function locationForAgent(
 }
 
 function agentStatus(agent: PersistedAgent) {
-  const value = (agent.runtime_status || agent.status || "").toLowerCase()
-  if (value.includes("fail") || value.includes("error")) {
+  if (isLangGraphSystemManaged(agent)) {
+    return "managed"
+  }
+  if (agent.metadata?.runtime_deleted) {
+    return "deleted"
+  }
+  if (agent.freshness === "stale") {
+    return "stale"
+  }
+  const agentValue = (agent.status || "").toLowerCase()
+  if (agentValue.includes("disabled")) {
+    return "disabled"
+  }
+  if (agentValue.includes("stale")) {
+    return "stale"
+  }
+  const runtimeValue = (agent.runtime_status || "").toLowerCase()
+  if (runtimeValue.includes("fail") || runtimeValue.includes("error")) {
     return "failed"
   }
   if (
-    value.includes("running") ||
-    value.includes("active") ||
-    value.includes("healthy")
+    agentValue.includes("enabled") ||
+    agentValue.includes("running") ||
+    runtimeValue.includes("active") ||
+    runtimeValue.includes("healthy")
   ) {
     return "running"
   }
   return "idle"
+}
+
+function isLangGraphSystemManaged(agent: PersistedAgent) {
+  const metadata = agent.metadata?.assistant_metadata
+  return (
+    metadata !== null &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    "created_by" in metadata &&
+    metadata.created_by === "system"
+  )
 }

@@ -20,6 +20,16 @@ export type RuntimeStatus =
   | "disabled"
   | "failed"
 
+export type RuntimeEndpoint = {
+  id: string
+  endpoint: string
+  kind: "canonical" | "alias" | "relay"
+  auth_ref: string
+  source_runtime_instance_id?: string
+  created_at: string
+  updated_at: string
+}
+
 export type RuntimeCapabilities = {
   read_agents: boolean
   read_agent_hierarchy: boolean
@@ -33,6 +43,8 @@ export type RuntimeCapabilities = {
   read_inventory?: boolean
   read_capability_catalog?: boolean
   set_agent_status?: boolean
+  delete_agent?: boolean
+  cancel_execution?: boolean
 }
 
 export type RuntimeInstance = {
@@ -57,6 +69,7 @@ export type RuntimeInstance = {
   last_sync_finished_at?: string | null
   last_sync_duration_ms?: number
   last_error?: string
+  endpoints: RuntimeEndpoint[]
 }
 
 export type CreateSecretRequest = {
@@ -78,6 +91,34 @@ export type CreateRuntimeInstanceRequest = {
   actor: string
   reason: string
   description?: string
+}
+
+export type UpdateRuntimeInstanceSettingsRequest = {
+  display_name: string
+  environment: string
+  labels: Record<string, string>
+  mode: RuntimeMode
+  endpoint: string
+  auth_ref: string
+  description: string
+  sync_enabled: boolean
+  sync_interval_seconds: number
+  actor: string
+  reason: string
+}
+
+export type RemoveRuntimeInstanceRequest = {
+  confirmation: string
+  actor: string
+  reason: string
+}
+
+export type ConsolidateRuntimeEndpointRequest = {
+  duplicate_runtime_instance_id: string
+  kind: "alias" | "relay"
+  confirmation: string
+  actor: string
+  reason: string
 }
 
 export type RuntimeConnectionTestResult = {
@@ -247,6 +288,21 @@ export type SetAgentStatusRequest = {
   dry_run?: boolean
 }
 
+export type DeleteAgentRequest = {
+  confirmation: string
+  actor: string
+  reason: string
+  idempotency_key: string
+  dry_run?: boolean
+}
+
+export type CancelExecutionRequest = {
+  actor: string
+  reason: string
+  idempotency_key: string
+  dry_run?: boolean
+}
+
 export type SyncRuntimeRequest = {
   actor: string
   reason: string
@@ -276,4 +332,66 @@ export type ControlAction = {
 
 export type ErrorResponse = {
   error: string
+}
+
+export type MetricSummary = {
+  agent_id?: string
+  runtime_connection_id?: string
+  period: { from: string; to: string }
+  available: boolean
+  configured: boolean
+  status: "available" | "unavailable" | "not_configured"
+  source?: "gantry_native" | "langsmith" | "otel"
+  last_observed_at?: string | null
+  usage: {
+    requests: number
+    input_tokens: number
+    output_tokens: number
+    cached_input_tokens: number
+    cache_creation_tokens: number
+    reasoning_tokens: number
+    total_tokens: number
+    estimated_cost_usd?: number | null
+  }
+  performance: {
+    average_duration_ms?: number | null
+    p95_duration_ms?: number | null
+    error_rate?: number | null
+  }
+  context: {
+    utilization?: number | null
+    quality?: "estimated"
+  }
+  models?: Array<{
+    model: string
+    request_count: number
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+  }>
+  time_series?: Array<{
+    started_at: string
+    request_count: number
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+  }>
+}
+
+export type TelemetryHealth = {
+  runtime_connection_id?: string
+  runtime_display_name?: string
+  configured: boolean
+  status: "succeeded" | "failed" | "running" | "not_configured"
+  source?: "gantry_native" | "langsmith" | "otel"
+  schema_version?: string
+  started_at?: string
+  finished_at?: string | null
+  last_successful_at?: string | null
+  records_accepted?: number
+  records_rejected?: number
+  records_deduplicated?: number
+  error_code?: string
+  message?: string
+  retryable?: boolean
 }

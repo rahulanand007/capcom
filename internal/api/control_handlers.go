@@ -24,6 +24,21 @@ type setAgentStatusRequest struct {
 	DryRun         bool               `json:"dry_run"`
 }
 
+type deleteAgentRequest struct {
+	Confirmation   string `json:"confirmation"`
+	Actor          string `json:"actor"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+	DryRun         bool   `json:"dry_run"`
+}
+
+type cancelExecutionRequest struct {
+	Actor          string `json:"actor"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+	DryRun         bool   `json:"dry_run"`
+}
+
 func handleSetAgentStatus(cfg RouterConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if cfg.ControlActions == nil {
@@ -65,6 +80,52 @@ func handleReconcileAgentAccess(cfg RouterConfig) http.HandlerFunc {
 		action, err := cfg.ControlActions.ReconcileAccess(r.Context(), services.ReconcileAccessInput{
 			AgentID: r.PathValue("id"), Access: domain.AccessDocument{Selections: selections, Source: "capcom"},
 			Actor: req.Actor, Reason: req.Reason, IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			return
+		}
+		writeJSON(w, http.StatusOK, controlActionResponse(action))
+	}
+}
+
+func handleDeleteAgent(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.ControlActions == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "control_actions_not_configured"})
+			return
+		}
+		var req deleteAgentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+			return
+		}
+		action, err := cfg.ControlActions.DeleteAgent(r.Context(), services.DeleteAgentInput{
+			AgentID: r.PathValue("id"), Confirmation: req.Confirmation, Actor: req.Actor, Reason: req.Reason,
+			IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			return
+		}
+		writeJSON(w, http.StatusOK, controlActionResponse(action))
+	}
+}
+
+func handleCancelExecution(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.ControlActions == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "control_actions_not_configured"})
+			return
+		}
+		var req cancelExecutionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+			return
+		}
+		action, err := cfg.ControlActions.CancelExecution(r.Context(), services.CancelExecutionInput{
+			ExecutionID: r.PathValue("id"), Actor: req.Actor, Reason: req.Reason,
+			IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})

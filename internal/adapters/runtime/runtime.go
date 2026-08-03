@@ -18,7 +18,21 @@ type Adapter interface {
 	GetAgentAccess(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string) (*domain.AccessDocument, error)
 	ReplaceAgentAccess(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string, access domain.AccessDocument) (*domain.AccessDocument, error)
 	SetAgentStatus(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string, status domain.AgentStatus) (*domain.AgentSnapshot, error)
+	DeleteAgent(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string) error
+	CancelExecution(ctx context.Context, conn domain.RuntimeConnection, execution domain.RuntimeExecutionSnapshot) error
 	CollectSnapshot(ctx context.Context, conn domain.RuntimeConnection) (*domain.RuntimeSnapshot, error)
+}
+
+// UsageReader is an optional telemetry capability implemented beside Adapter.
+// It does not participate in inventory, access, or control synchronization.
+type UsageReader interface {
+	QueryUsage(ctx context.Context, conn domain.RuntimeConnection, query domain.UsageQuery) ([]domain.UsageObservation, error)
+}
+
+// UsageReaderConfigurator lets optional connectors distinguish unavailable
+// telemetry from a measured zero.
+type UsageReaderConfigurator interface {
+	TelemetryConfigured(conn domain.RuntimeConnection) bool
 }
 
 type CheckResult struct {
@@ -42,4 +56,6 @@ type Capabilities struct {
 	ReadInventory          bool `json:"read_inventory"`
 	ReadCapabilityCatalog  bool `json:"read_capability_catalog"`
 	SetAgentStatus         bool `json:"set_agent_status"`
+	DeleteAgent            bool `json:"delete_agent"`
+	CancelExecution        bool `json:"cancel_execution"`
 }

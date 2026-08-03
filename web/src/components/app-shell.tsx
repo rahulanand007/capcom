@@ -245,6 +245,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {agentsCount}
             </span>
           </SidebarLink>
+
+          <SidebarLink href="/metrics" active={pathname === "/metrics"}>
+            Metrics
+          </SidebarLink>
         </nav>
 
         <div className="mt-auto">

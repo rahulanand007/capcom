@@ -27,7 +27,9 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   useAgentAccessQuery,
   useAgentDelegationsQuery,
+  useAgentMetricsQuery,
   useAgentSkillsQuery,
+  useDeleteAgentMutation,
   usePersistedAgentQuery,
   useReconcileAgentAccessMutation,
   useSetAgentStatusMutation,
@@ -38,6 +40,7 @@ import type {
   AgentDelegation,
   ControlAction,
   JsonObject,
+  MetricSummary,
   PersistedAgent,
   RuntimeAccessSelection,
   RuntimeAgentSkill,
@@ -61,6 +64,7 @@ export function AgentDrilldownDrawer({
   const skillsQuery = useAgentSkillsQuery(open ? agentId : undefined)
   const accessQuery = useAgentAccessQuery(open ? agentId : undefined)
   const delegationsQuery = useAgentDelegationsQuery(open ? agentId : undefined)
+  const metricsQuery = useAgentMetricsQuery(open ? agentId : undefined)
   const runtimeInstancesQuery = useRuntimeInstancesQuery(open)
   const detail = agentQuery.data ?? agent
   const instance = runtimeInstancesQuery.data?.find(
@@ -72,6 +76,7 @@ export function AgentDrilldownDrawer({
   const skills = skillsQuery.data ?? []
   const selections = accessQuery.data?.selections ?? []
   const canControl = instance?.mode === "control_enabled"
+  const systemManaged = detail ? isLangGraphSystemManaged(detail) : false
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -117,6 +122,10 @@ export function AgentDrilldownDrawer({
                       : "Unknown runtime"
                   }
                 />
+                <ObservabilitySection
+                  metrics={metricsQuery.data}
+                  loading={metricsQuery.isLoading}
+                />
                 <DelegationsSection
                   agent={detail}
                   agents={instanceAgentsQuery.data ?? []}
@@ -146,6 +155,22 @@ export function AgentDrilldownDrawer({
                 pendingAccess={accessQuery.isLoading}
               />
             ) : null}
+          </div>
+        ) : null}
+        {detail && instance?.runtime_type === "langgraph" ? (
+          <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--sl)] px-6 py-4">
+            <DeleteAssistantEditor
+              agent={detail}
+              enabled={canControl && !Boolean(detail.metadata?.runtime_deleted) && !systemManaged}
+              disabledReason={
+                systemManaged
+                  ? "Managed by LangGraph graph configuration"
+                  : canControl
+                    ? "Assistant was already deleted"
+                    : "Runtime instance is read-only"
+              }
+              onDeleted={() => onOpenChange(false)}
+            />
           </div>
         ) : null}
       </SheetContent>
@@ -578,7 +603,6 @@ function AgentStatusEditor({
                     toast.success(`${command} agent ${actionStatus(action)}${dryRun ? " (validation only)" : ""}`)
                     setOpen(false)
                   },
-                  onError: (error) => toast.error(error.message),
                 }
               )
             }}
@@ -611,6 +635,115 @@ function AgentStatusEditor({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function DeleteAssistantEditor({
+  agent,
+  enabled,
+  disabledReason,
+  onDeleted,
+}: {
+  agent: PersistedAgent
+  enabled: boolean
+  disabledReason: string
+  onDeleted: () => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const mutation = useDeleteAgentMutation(agent.id)
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        disabled={!enabled}
+        title={enabled ? "Delete assistant" : disabledReason}
+        className="font-hud text-xs hover:border-[var(--dg)] hover:text-[var(--dg)]"
+        onClick={() => setOpen(true)}
+      >
+        Delete assistant
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="border border-[var(--hl)] bg-[var(--el)] shadow-[var(--shdw)] sm:max-w-[480px]">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const formData = new FormData(event.currentTarget)
+              const actor = String(formData.get("actor") ?? "").trim()
+              const reason = String(formData.get("reason") ?? "").trim()
+              const confirmation = String(formData.get("confirmation") ?? "").trim()
+              if (!actor || !reason || confirmation !== agent.runtime_agent_id) return
+              const dryRun = formData.get("dry_run") === "on"
+              mutation.mutate(
+                {
+                  actor,
+                  reason,
+                  confirmation,
+                  idempotency_key: randomIdempotencyKey(),
+                  dry_run: dryRun,
+                },
+                {
+                  onSuccess: (action) => {
+                    toast.success(
+                      `Delete assistant ${actionStatus(action)}${dryRun ? " (validation only)" : ""}`
+                    )
+                    setOpen(false)
+                    if (!dryRun) onDeleted()
+                  },
+                }
+              )
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Delete {agent.name}</DialogTitle>
+              <DialogDescription>
+                This removes the assistant and every one of its versions from LangGraph.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Actor</span>
+              <Input name="actor" defaultValue="local-operator" required className="font-hud text-[13px]" />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Reason</span>
+              <Textarea name="reason" defaultValue={`Delete ${agent.name}`} required rows={3} className="resize-none font-hud text-[13px]" />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Runtime agent ID</span>
+              <Input
+                name="confirmation"
+                placeholder={agent.runtime_agent_id}
+                required
+                autoComplete="off"
+                className="font-hud text-[13px]"
+              />
+            </label>
+            <label className="flex items-center gap-2 font-hud text-[12px] text-[var(--mu)]">
+              <input name="dry_run" type="checkbox" defaultChecked className="accent-[var(--ac)]" />
+              Validate only
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="submit" variant="destructive" disabled={mutation.isPending}>
+                {mutation.isPending ? "Submitting" : "Delete assistant"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function isLangGraphSystemManaged(agent: PersistedAgent) {
+  const metadata = agent.metadata?.assistant_metadata
+  return (
+    metadata !== null &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    "created_by" in metadata &&
+    metadata.created_by === "system"
   )
 }
 
@@ -761,6 +894,150 @@ function ReconcileAccessForm({
       </DialogFooter>
     </form>
   )
+}
+
+function ObservabilitySection({
+  metrics,
+  loading,
+}: {
+  metrics?: MetricSummary
+  loading: boolean
+}) {
+  if (loading) {
+    return (
+      <DrawerSection title="Observability">
+        <Skeleton className="h-40 rounded-lg" />
+      </DrawerSection>
+    )
+  }
+  if (!metrics?.available) {
+    return (
+      <DrawerSection title="Observability">
+        <EmptyPanel>
+          <div className="font-hud text-[12px] text-[var(--tx)]">
+            Token telemetry:{" "}
+            {metrics?.configured ? "temporarily unavailable" : "not configured"}
+          </div>
+          <div className="mt-1">
+            Execution inventory remains available.{" "}
+            {metrics?.configured
+              ? "Check telemetry health and connector credentials."
+              : "Configure LangSmith or OpenTelemetry for LangGraph, or grant Gantry the usage:read scope."}
+          </div>
+        </EmptyPanel>
+      </DrawerSection>
+    )
+  }
+
+  const sourceLabel = {
+    gantry_native: "Gantry native",
+    langsmith: "LangSmith",
+    otel: "OpenTelemetry",
+  }[metrics.source ?? "otel"]
+  const values = [
+    ["Requests", formatCount(metrics.usage.requests)],
+    ["Input", formatTokens(metrics.usage.input_tokens)],
+    ["Output", formatTokens(metrics.usage.output_tokens)],
+    ["Cached", formatTokens(metrics.usage.cached_input_tokens)],
+    ["Cost", formatCost(metrics.usage.estimated_cost_usd)],
+    ["P95 latency", formatDuration(metrics.performance.p95_duration_ms)],
+    ["Errors", formatPercent(metrics.performance.error_rate)],
+    ["Context", formatPercent(metrics.context.utilization)],
+  ]
+  const peak = Math.max(
+    1,
+    ...(metrics.time_series ?? []).map((bucket) => bucket.total_tokens)
+  )
+
+  return (
+    <DrawerSection title="Observability">
+      <div className="rounded-lg border border-[var(--sl)] bg-[var(--sf)] p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 font-hud text-[11px]">
+          <span className="text-[var(--fa)]">Source: {sourceLabel}</span>
+          <span className="text-[var(--mu)]">
+            Last observation:{" "}
+            {metrics.last_observed_at
+              ? relativeTime(metrics.last_observed_at)
+              : "unknown"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-[var(--sl)] bg-[var(--sl)] sm:grid-cols-4">
+          {values.map(([label, value]) => (
+            <div key={label} className="bg-[var(--el)] px-3 py-2.5">
+              <div className="capcom-eyebrow">{label}</div>
+              <div className="mt-1 font-hud text-[15px] text-[var(--tx)]">
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(metrics.time_series?.length ?? 0) > 0 ? (
+          <div className="mt-3">
+            <div className="capcom-eyebrow mb-2">24-hour token usage</div>
+            <div className="flex h-16 items-end gap-1" aria-label="Token usage time series">
+              {metrics.time_series?.map((bucket) => (
+                <div
+                  key={bucket.started_at}
+                  title={`${formatTokens(bucket.total_tokens)} tokens`}
+                  className="min-w-1 flex-1 rounded-t-sm bg-[var(--ac)] opacity-75"
+                  style={{
+                    height: `${Math.max(4, (bucket.total_tokens / peak) * 100)}%`,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {(metrics.models?.length ?? 0) > 0 ? (
+          <div className="mt-3 flex flex-col gap-1">
+            <div className="capcom-eyebrow mb-1">By model</div>
+            {metrics.models?.map((model) => (
+              <div
+                key={model.model || "unknown"}
+                className="flex items-center justify-between gap-3 font-hud text-[11px]"
+              >
+                <span className="truncate text-[var(--fa)]">
+                  {model.model || "Unknown model"}
+                </span>
+                <span className="text-[var(--tx)]">
+                  {formatTokens(model.total_tokens)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-3 font-hud text-[10px] text-[var(--mu)]">
+          {metrics.context.quality === "estimated"
+            ? "Context: estimated. "
+            : ""}
+          {metrics.usage.estimated_cost_usd != null
+            ? "Cost: estimated using the observation’s catalog version."
+            : "Cost estimate unavailable."}
+        </div>
+      </div>
+    </DrawerSection>
+  )
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat("en", { notation: "compact" }).format(value)
+}
+
+function formatTokens(value: number) {
+  return `${formatCount(value)} tok`
+}
+
+function formatCost(value?: number | null) {
+  return value == null ? "—" : `$${value.toFixed(2)}`
+}
+
+function formatDuration(value?: number | null) {
+  if (value == null) return "—"
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`
+}
+
+function formatPercent(value?: number | null) {
+  return value == null ? "—" : `${(value * 100).toFixed(1)}%`
 }
 
 function DrawerSection({

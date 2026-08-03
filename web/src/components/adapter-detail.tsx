@@ -2,10 +2,15 @@
 
 import * as React from "react"
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, GitBranch, RefreshCw } from "lucide-react"
+import { Ban, ChevronDown, ChevronRight, GitBranch, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { AddInstanceDialog } from "@/components/add-instance-dialog"
+import { AdapterSettingsDialog } from "@/components/adapter-settings-dialog"
+import {
+  ConsolidateInstanceDialog,
+  EndpointTopology,
+} from "@/components/consolidate-instance-dialog"
 import { AgentDrilldownDrawer } from "@/components/agent-drilldown-drawer"
 import { RuntimeCatalogPanel } from "@/components/runtime-catalog-panel"
 import {
@@ -15,10 +20,20 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import {
   Collapsible,
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Table,
   TableBody,
@@ -41,6 +56,7 @@ import {
 import { capcomApi } from "@/lib/api-client"
 import {
   queryKeys,
+  useCancelExecutionMutation,
   usePersistedAgentsQuery,
   useRuntimeInstanceAgentsQuery,
   useRuntimeInstanceExecutionsQuery,
@@ -61,10 +77,19 @@ import { cn } from "@/lib/utils"
 
 const AGENT_PREVIEW_LIMIT = 8
 
+function randomControlKey() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID()
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export function AdapterDetail({ adapterId }: { adapterId: string }) {
   const queryClient = useQueryClient()
   const [syncAllOpen, setSyncAllOpen] = React.useState(false)
   const [addInstanceOpen, setAddInstanceOpen] = React.useState(false)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [consolidateOpen, setConsolidateOpen] = React.useState(false)
   const [selectedAgent, setSelectedAgent] = React.useState<PersistedAgent | null>(
     null
   )
@@ -186,10 +211,20 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
           <Button
             variant="outline"
             className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
-            onClick={() => toast.info("Adapter settings arrive in a later stage.")}
+            onClick={() => setSettingsOpen(true)}
           >
             Adapter settings
           </Button>
+          {adapter.instances.length > 1 ? (
+            <Button
+              variant="outline"
+              className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
+              onClick={() => setConsolidateOpen(true)}
+            >
+              <GitBranch className="size-4" />
+              Consolidate connections
+            </Button>
+          ) : null}
           <Button
             className="shadow-[0_0_0_3px_var(--glow)] hover:brightness-[1.08]"
             onClick={() => setSyncAllOpen(true)}
@@ -239,6 +274,18 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
         open={addInstanceOpen}
         defaultAdapterId={runtimeTypeFromRoute(adapterId)}
         onOpenChange={setAddInstanceOpen}
+      />
+
+      <AdapterSettingsDialog
+        adapterName={adapter.name}
+        instances={adapter.instances.map((item) => item.instance)}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
+      <ConsolidateInstanceDialog
+        instances={adapter.instances.map((item) => item.instance)}
+        open={consolidateOpen}
+        onOpenChange={setConsolidateOpen}
       />
     </section>
   )
@@ -338,6 +385,10 @@ function InstanceGroup({
 
         <CollapsibleContent>
           <div className="border-t border-[var(--sl)]">
+            <EndpointTopology
+              endpoints={item.instance.endpoints}
+              fallback={item.instance.endpoint}
+            />
             <AgentSubTable
               loading={agentsQuery.isLoading}
               agents={shownAgents}
@@ -352,6 +403,7 @@ function InstanceGroup({
                 loading={executionsQuery.isLoading}
                 executions={executions}
                 agents={agents}
+                instance={item.instance}
               />
             ) : null}
             <InstanceCapabilityPanel instance={item.instance} />
@@ -447,13 +499,22 @@ function RuntimeExecutionsPanel({
   loading,
   executions,
   agents,
+  instance,
 }: {
   loading: boolean
   executions: RuntimeExecution[]
   agents: PersistedAgent[]
+  instance: RuntimeInstance
 }) {
   const [collapsedThreads, setCollapsedThreads] = React.useState<Set<string>>(
     () => new Set()
+  )
+  const [cancelTarget, setCancelTarget] = React.useState<RuntimeExecution | null>(
+    null
+  )
+  const cancelMutation = useCancelExecutionMutation(
+    cancelTarget?.id ?? "",
+    instance.id
   )
   const agentNames = React.useMemo(
     () => new Map(agents.map((agent) => [agent.runtime_agent_id, agent.name])),
@@ -500,7 +561,8 @@ function RuntimeExecutionsPanel({
           <col className="w-[20%]" />
           <col className="w-[13%]" />
           <col className="w-[17%]" />
-          <col className="w-[15%]" />
+          <col className="w-[12%]" />
+          <col className="w-[11%]" />
         </colgroup>
         <TableHeader>
           <TableRow className="border-[var(--sl)] hover:bg-transparent">
@@ -509,6 +571,7 @@ function RuntimeExecutionsPanel({
             <TableHead className="capcom-eyebrow h-9 px-[18px]">Status</TableHead>
             <TableHead className="capcom-eyebrow h-9 px-[18px]">Started</TableHead>
             <TableHead className="capcom-eyebrow h-9 px-[18px]">Duration</TableHead>
+            <TableHead className="capcom-eyebrow h-9 px-[18px] text-right">Action</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -587,13 +650,32 @@ function RuntimeExecutionsPanel({
                   <TableCell className="px-[18px] py-3 font-hud text-[12px] text-[var(--fa)]">
                     {executionDuration(execution)}
                   </TableCell>
+                  <TableCell className="px-[18px] py-3 text-right">
+                    {instance.runtime_type === "langgraph" &&
+                    instance.mode === "control_enabled" &&
+                    execution.kind === "run" &&
+                    ["pending", "running"].includes(execution.status) ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        title="Cancel run"
+                        aria-label="Cancel run"
+                        className="text-[var(--dg)] hover:text-[var(--dg)]"
+                        onClick={() => setCancelTarget(execution)}
+                      >
+                        <Ban className="size-3.5" />
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </TableCell>
                 </TableRow>
               )
             })
           ) : (
             <TableRow className="border-[var(--sl)] hover:bg-transparent">
               <TableCell
-                colSpan={5}
+                colSpan={6}
                 className="px-[18px] py-8 text-center text-[13px] text-[var(--mu)]"
               >
                 No runtime executions imported yet. Run a sync after invoking an agent.
@@ -603,6 +685,68 @@ function RuntimeExecutionsPanel({
         </TableBody>
       </Table>
       </div>
+      <Dialog
+        open={Boolean(cancelTarget)}
+        onOpenChange={(open) => {
+          if (!open && !cancelMutation.isPending) setCancelTarget(null)
+        }}
+      >
+        <DialogContent className="border border-[var(--hl)] bg-[var(--el)] shadow-[var(--shdw)] sm:max-w-[480px]">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!cancelTarget) return
+              const formData = new FormData(event.currentTarget)
+              const actor = String(formData.get("actor") ?? "").trim()
+              const reason = String(formData.get("reason") ?? "").trim()
+              if (!actor || !reason) return
+              const dryRun = formData.get("dry_run") === "on"
+              cancelMutation.mutate(
+                {
+                  actor,
+                  reason,
+                  idempotency_key: randomControlKey(),
+                  dry_run: dryRun,
+                },
+                {
+                  onSuccess: (action) => {
+                    toast.success(
+                      `Cancel run ${action.status.replaceAll("_", " ")}${dryRun ? " (validation only)" : ""}`
+                    )
+                    setCancelTarget(null)
+                  },
+                }
+              )
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Cancel run</DialogTitle>
+              <DialogDescription>
+                Interrupt this run and preserve its record and checkpoints.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Actor</span>
+              <Input name="actor" defaultValue="local-operator" required className="font-hud text-[13px]" />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="capcom-eyebrow">Reason</span>
+              <Textarea name="reason" defaultValue="Stop active execution" required rows={3} className="resize-none font-hud text-[13px]" />
+            </label>
+            <label className="flex items-center gap-2 font-hud text-[12px] text-[var(--mu)]">
+              <input name="dry_run" type="checkbox" className="accent-[var(--ac)]" />
+              Validate only
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={cancelMutation.isPending} onClick={() => setCancelTarget(null)}>Cancel</Button>
+              <Button type="submit" variant="destructive" disabled={cancelMutation.isPending}>
+                {cancelMutation.isPending ? "Cancelling" : "Cancel run"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
@@ -827,6 +971,8 @@ function capabilityEntries(capabilities: RuntimeCapabilities) {
     ["read_inventory", "Inventory", Boolean(capabilities.read_inventory)],
     ["read_capability_catalog", "Capability catalog", Boolean(capabilities.read_capability_catalog)],
     ["set_agent_status", "Agent status control", Boolean(capabilities.set_agent_status)],
+    ["delete_agent", "Delete agent", Boolean(capabilities.delete_agent)],
+    ["cancel_execution", "Cancel execution", Boolean(capabilities.cancel_execution)],
   ] as const
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -42,6 +43,23 @@ type ReconcileAccessInput struct {
 type SetAgentStatusInput struct {
 	AgentID        string
 	Status         domain.AgentStatus
+	Actor          string
+	Reason         string
+	IdempotencyKey string
+	DryRun         bool
+}
+
+type DeleteAgentInput struct {
+	AgentID        string
+	Confirmation   string
+	Actor          string
+	Reason         string
+	IdempotencyKey string
+	DryRun         bool
+}
+
+type CancelExecutionInput struct {
+	ExecutionID    string
 	Actor          string
 	Reason         string
 	IdempotencyKey string
@@ -227,6 +245,307 @@ func (s ControlActionService) SetAgentStatus(ctx context.Context, input SetAgent
 	}
 	s.auditStatusAction(ctx, action, "control_action.succeeded", "succeeded", before, after, result)
 	return action, nil
+}
+
+func (s ControlActionService) DeleteAgent(ctx context.Context, input DeleteAgentInput) (domain.ControlAction, error) {
+	if strings.TrimSpace(input.AgentID) == "" || strings.TrimSpace(input.Actor) == "" || strings.TrimSpace(input.Reason) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return domain.ControlAction{}, fmt.Errorf("agent id, actor, reason, and idempotency_key are required")
+	}
+	if existing, err := s.actions.FindByIdempotencyKey(ctx, input.IdempotencyKey); err == nil {
+		return existing, nil
+	} else if err != sql.ErrNoRows {
+		return domain.ControlAction{}, err
+	}
+	detail, err := s.agents.GetPersistedAgent(ctx, input.AgentID)
+	if err != nil {
+		return domain.ControlAction{}, err
+	}
+	conn, err := s.runtimes.Get(ctx, detail.Agent.RuntimeConnectionID)
+	if err != nil {
+		return domain.ControlAction{}, err
+	}
+	before := map[string]any{
+		"runtime_agent_id": detail.Agent.RuntimeAgentID,
+		"name":             detail.Agent.Name,
+		"status":           detail.Agent.Status,
+	}
+	after := map[string]any{"deleted": true}
+	action := domain.ControlAction{
+		RuntimeConnectionID: conn.ID,
+		AgentID:             input.AgentID,
+		Type:                "delete_agent",
+		Status:              domain.ControlActionQueued,
+		Actor:               strings.TrimSpace(input.Actor),
+		Reason:              strings.TrimSpace(input.Reason),
+		IdempotencyKey:      strings.TrimSpace(input.IdempotencyKey),
+		Before:              before,
+		After:               after,
+	}
+	if strings.TrimSpace(input.Confirmation) != detail.Agent.RuntimeAgentID {
+		message := fmt.Sprintf("confirmation must exactly match runtime agent id %q", detail.Agent.RuntimeAgentID)
+		rejectErr := s.rejectControlAction(ctx, action, "agent", input.AgentID, before, after, message, "confirmation_mismatch")
+		return actionFromError(rejectErr, action), rejectErr
+	}
+	if conn.Kind == domain.RuntimeKindLangGraph && isLangGraphSystemManaged(detail.Agent.Metadata) {
+		message := "LangGraph system-managed assistants are recreated from graph configuration and cannot be deleted through Capcom"
+		rejectErr := s.rejectControlAction(ctx, action, "agent", input.AgentID, before, after, message, "system_managed_agent")
+		return actionFromError(rejectErr, action), rejectErr
+	}
+	adapter, err := s.validateCapability(ctx, conn, action, before, after, "agent", input.AgentID, func(capabilities runtimeadapter.Capabilities) bool {
+		return capabilities.DeleteAgent
+	}, "runtime adapter does not support agent deletion")
+	if err != nil {
+		return actionFromError(err, action), err
+	}
+	action, err = s.actions.Create(ctx, action)
+	if err != nil {
+		return action, err
+	}
+	s.auditControlAction(ctx, action, "control_action.requested", "succeeded", "agent", input.AgentID, before, after, nil)
+	if input.DryRun {
+		action.Status = domain.ControlActionSucceeded
+		result := map[string]any{"dry_run": true, "validated": true, "runtime_agent_id": detail.Agent.RuntimeAgentID}
+		action, err = s.actions.Update(ctx, action, after, result, "")
+		s.auditControlAction(ctx, action, "control_action.dry_run_succeeded", "succeeded", "agent", input.AgentID, before, after, result)
+		return action, err
+	}
+	action.Status = domain.ControlActionRunning
+	action, err = s.actions.Update(ctx, action, after, nil, "")
+	if err != nil {
+		return action, err
+	}
+	if callErr := adapter.DeleteAgent(ctx, conn, detail.Agent.RuntimeAgentID); callErr != nil {
+		return s.failControlAction(ctx, action, "agent", input.AgentID, before, after, "delete runtime agent", callErr)
+	}
+	result := map[string]any{"deleted": true, "runtime_agent_id": detail.Agent.RuntimeAgentID}
+	if err := s.agents.MarkAgentDeleted(ctx, input.AgentID); err != nil {
+		result["local_tombstone_error"] = sanitizeRuntimeError(err)
+	}
+	action.Status = domain.ControlActionSucceeded
+	action, err = s.actions.Update(ctx, action, after, result, "")
+	if err != nil {
+		return action, err
+	}
+	s.runVerificationSync(ctx, conn.ID, input.Actor, "verify agent deletion: "+input.Reason, result)
+	s.auditControlAction(ctx, action, "control_action.succeeded", "succeeded", "agent", input.AgentID, before, after, result)
+	return action, nil
+}
+
+func isLangGraphSystemManaged(metadata map[string]any) bool {
+	assistantMetadata, ok := metadata["assistant_metadata"].(map[string]any)
+	if !ok {
+		return false
+	}
+	createdBy, _ := assistantMetadata["created_by"].(string)
+	return strings.EqualFold(strings.TrimSpace(createdBy), "system")
+}
+
+func (s ControlActionService) CancelExecution(ctx context.Context, input CancelExecutionInput) (domain.ControlAction, error) {
+	if strings.TrimSpace(input.ExecutionID) == "" || strings.TrimSpace(input.Actor) == "" || strings.TrimSpace(input.Reason) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return domain.ControlAction{}, fmt.Errorf("execution id, actor, reason, and idempotency_key are required")
+	}
+	if existing, err := s.actions.FindByIdempotencyKey(ctx, input.IdempotencyKey); err == nil {
+		return existing, nil
+	} else if err != sql.ErrNoRows {
+		return domain.ControlAction{}, err
+	}
+	execution, err := s.agents.GetRuntimeExecution(ctx, input.ExecutionID)
+	if err != nil {
+		return domain.ControlAction{}, err
+	}
+	conn, err := s.runtimes.Get(ctx, execution.RuntimeConnectionID)
+	if err != nil {
+		return domain.ControlAction{}, err
+	}
+	agentID := s.findExecutionAgentID(ctx, execution)
+	before := map[string]any{
+		"runtime_execution_id": execution.RuntimeExecutionID,
+		"thread_id":            execution.ParentRuntimeExecutionID,
+		"status":               execution.Status,
+	}
+	after := map[string]any{"status": "interrupted"}
+	action := domain.ControlAction{
+		RuntimeConnectionID: conn.ID,
+		AgentID:             agentID,
+		Type:                "cancel_execution",
+		Status:              domain.ControlActionQueued,
+		Actor:               strings.TrimSpace(input.Actor),
+		Reason:              strings.TrimSpace(input.Reason),
+		IdempotencyKey:      strings.TrimSpace(input.IdempotencyKey),
+		Before:              before,
+		After:               after,
+	}
+	if execution.Kind != "run" {
+		rejectErr := s.rejectControlAction(ctx, action, "runtime_execution", input.ExecutionID, before, after, "only run executions can be cancelled", "invalid_execution_kind")
+		return actionFromError(rejectErr, action), rejectErr
+	}
+	if execution.Status != "pending" && execution.Status != "running" {
+		message := fmt.Sprintf("execution status %q cannot be cancelled", execution.Status)
+		rejectErr := s.rejectControlAction(ctx, action, "runtime_execution", input.ExecutionID, before, after, message, "invalid_execution_status")
+		return actionFromError(rejectErr, action), rejectErr
+	}
+	adapter, err := s.validateCapability(ctx, conn, action, before, after, "runtime_execution", input.ExecutionID, func(capabilities runtimeadapter.Capabilities) bool {
+		return capabilities.CancelExecution
+	}, "runtime adapter does not support execution cancellation")
+	if err != nil {
+		return actionFromError(err, action), err
+	}
+	action, err = s.actions.Create(ctx, action)
+	if err != nil {
+		return action, err
+	}
+	s.auditControlAction(ctx, action, "control_action.requested", "succeeded", "runtime_execution", input.ExecutionID, before, after, nil)
+	if input.DryRun {
+		action.Status = domain.ControlActionSucceeded
+		result := map[string]any{"dry_run": true, "validated": true, "runtime_execution_id": execution.RuntimeExecutionID}
+		action, err = s.actions.Update(ctx, action, after, result, "")
+		s.auditControlAction(ctx, action, "control_action.dry_run_succeeded", "succeeded", "runtime_execution", input.ExecutionID, before, after, result)
+		return action, err
+	}
+	action.Status = domain.ControlActionRunning
+	action, err = s.actions.Update(ctx, action, after, nil, "")
+	if err != nil {
+		return action, err
+	}
+	if callErr := adapter.CancelExecution(ctx, conn, execution.RuntimeExecutionSnapshot); callErr != nil {
+		return s.failControlAction(ctx, action, "runtime_execution", input.ExecutionID, before, after, "cancel runtime execution", callErr)
+	}
+	result := map[string]any{"status": "interrupted", "runtime_execution_id": execution.RuntimeExecutionID}
+	action.Status = domain.ControlActionSucceeded
+	action, err = s.actions.Update(ctx, action, after, result, "")
+	if err != nil {
+		return action, err
+	}
+	s.runVerificationSync(ctx, conn.ID, input.Actor, "verify execution cancellation: "+input.Reason, result)
+	s.auditControlAction(ctx, action, "control_action.succeeded", "succeeded", "runtime_execution", input.ExecutionID, before, after, result)
+	return action, nil
+}
+
+type capabilityPredicate func(runtimeadapter.Capabilities) bool
+
+type rejectedActionError struct {
+	action domain.ControlAction
+	err    error
+}
+
+func (e rejectedActionError) Error() string { return e.err.Error() }
+
+func actionFromError(err error, fallback domain.ControlAction) domain.ControlAction {
+	var rejected rejectedActionError
+	if errors.As(err, &rejected) {
+		return rejected.action
+	}
+	return fallback
+}
+
+func (s ControlActionService) validateCapability(
+	ctx context.Context,
+	conn domain.RuntimeConnection,
+	action domain.ControlAction,
+	before, after map[string]any,
+	targetType, targetID string,
+	supported capabilityPredicate,
+	unsupportedMessage string,
+) (runtimeadapter.Adapter, error) {
+	if conn.Mode != domain.RuntimeModeControlEnabled {
+		return nil, s.rejectControlAction(ctx, action, targetType, targetID, before, after, "runtime connection is read-only", "read_only_runtime")
+	}
+	adapter, ok := s.adapters[conn.Kind]
+	if !ok {
+		return nil, s.rejectControlAction(ctx, action, targetType, targetID, before, after, "runtime adapter is not registered", "adapter_unavailable")
+	}
+	check, err := adapter.Check(ctx, conn)
+	if err != nil {
+		return nil, s.rejectControlAction(ctx, action, targetType, targetID, before, after, sanitizeRuntimeError(err), "adapter_check_failed")
+	}
+	if !supported(check.Capabilities) {
+		return nil, s.rejectControlAction(ctx, action, targetType, targetID, before, after, unsupportedMessage, "unsupported_action")
+	}
+	return adapter, nil
+}
+
+func (s ControlActionService) rejectControlAction(
+	ctx context.Context,
+	action domain.ControlAction,
+	targetType, targetID string,
+	before, after map[string]any,
+	message, reason string,
+) error {
+	action.Status = domain.ControlActionRejected
+	created, err := s.actions.Create(ctx, action)
+	if err != nil {
+		return err
+	}
+	created, _ = s.actions.Update(ctx, created, after, nil, message)
+	s.auditControlAction(ctx, created, "control_action.rejected", "rejected", targetType, targetID, before, after, map[string]any{"reason": reason})
+	return rejectedActionError{action: created, err: fmt.Errorf("%s", message)}
+}
+
+func (s ControlActionService) failControlAction(
+	ctx context.Context,
+	action domain.ControlAction,
+	targetType, targetID string,
+	before, after map[string]any,
+	prefix string,
+	callErr error,
+) (domain.ControlAction, error) {
+	action.Status = domain.ControlActionFailed
+	message := sanitizeRuntimeError(callErr)
+	action, _ = s.actions.Update(ctx, action, after, nil, message)
+	s.auditControlAction(ctx, action, "control_action.failed", "failed", targetType, targetID, before, after, map[string]any{"error": message})
+	return action, fmt.Errorf("%s: %w", prefix, callErr)
+}
+
+func (s ControlActionService) runVerificationSync(ctx context.Context, runtimeID, actor, reason string, result map[string]any) {
+	if s.syncer == nil {
+		return
+	}
+	if _, err := s.syncer.Sync(ctx, SyncRuntimeInput{
+		RuntimeConnectionID: runtimeID,
+		Trigger:             domain.SyncTriggerPostAction,
+		Actor:               actor,
+		Reason:              reason,
+	}); err != nil {
+		result["verification_sync_error"] = sanitizeRuntimeError(err)
+	}
+}
+
+func (s ControlActionService) findExecutionAgentID(ctx context.Context, execution domain.PersistedRuntimeExecution) string {
+	agents, err := s.agents.ListPersistedAgents(ctx, execution.RuntimeConnectionID)
+	if err != nil {
+		return ""
+	}
+	for _, agent := range agents {
+		if agent.RuntimeAgentID == execution.RuntimeAgentID {
+			return agent.ID
+		}
+	}
+	return ""
+}
+
+func (s ControlActionService) auditControlAction(
+	ctx context.Context,
+	action domain.ControlAction,
+	eventType, result, targetType, targetID string,
+	before, after, metadata map[string]any,
+) {
+	if s.audit == nil {
+		return
+	}
+	_, _ = s.audit.Create(ctx, domain.AuditEvent{
+		RuntimeConnectionID: action.RuntimeConnectionID,
+		AgentID:             action.AgentID,
+		ControlActionID:     action.ID,
+		Actor:               action.Actor,
+		EventType:           eventType,
+		TargetType:          targetType,
+		TargetID:            targetID,
+		Reason:              action.Reason,
+		Before:              before,
+		After:               after,
+		Result:              result,
+		Metadata:            metadata,
+	})
 }
 
 func (s ControlActionService) rejectStatusAction(ctx context.Context, action domain.ControlAction, before, after map[string]any, message, reason string) (domain.ControlAction, error) {

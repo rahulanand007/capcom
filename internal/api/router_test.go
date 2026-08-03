@@ -153,7 +153,7 @@ func TestCreateRuntimeConnection(t *testing.T) {
 	}
 }
 
-func TestUpdateRuntimeInstanceIdentity(t *testing.T) {
+func TestUpdateRuntimeInstanceSettings(t *testing.T) {
 	router := NewRouter(RouterConfig{
 		Version:            "test",
 		AdminToken:         "test-admin-token",
@@ -163,8 +163,14 @@ func TestUpdateRuntimeInstanceIdentity(t *testing.T) {
 		"display_name":"Gantry Staging",
 		"environment":"staging",
 		"labels":{"team":"platform"},
+		"mode":"control_enabled",
+		"endpoint":"http://127.0.0.1:8788",
+		"auth_ref":"gantry-key",
+		"description":"Staging control runtime",
+		"sync_enabled":true,
+		"sync_interval_seconds":90,
 		"actor":"test",
-		"reason":"classify instance"
+		"reason":"update adapter settings"
 	}`)
 	req := authenticatedRequest(http.MethodPatch, "/v1/runtime-instances/runtime-1", body)
 	rec := httptest.NewRecorder()
@@ -179,7 +185,10 @@ func TestUpdateRuntimeInstanceIdentity(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if got.Name != "local-gantry" || got.DisplayName != "Gantry Staging" || got.Environment != "staging" {
-		t.Fatalf("instance identity = %#v", got)
+		t.Fatalf("instance settings = %#v", got)
+	}
+	if got.Mode != "control_enabled" || got.Endpoint != "http://127.0.0.1:8788" || got.SyncIntervalSeconds != 90 {
+		t.Fatalf("instance settings = %#v", got)
 	}
 }
 
@@ -484,7 +493,7 @@ func (fakeRuntimeConnectionService) Create(_ context.Context, input services.Cre
 	}, nil
 }
 
-func (fakeRuntimeConnectionService) UpdateIdentity(_ context.Context, input services.UpdateRuntimeInstanceIdentityInput) (domain.RuntimeConnection, error) {
+func (fakeRuntimeConnectionService) UpdateSettings(_ context.Context, input services.UpdateRuntimeInstanceSettingsInput) (domain.RuntimeConnection, error) {
 	conn, err := fakeRuntimeConnectionService{}.Get(context.Background(), input.ID)
 	if err != nil {
 		return domain.RuntimeConnection{}, err
@@ -492,6 +501,28 @@ func (fakeRuntimeConnectionService) UpdateIdentity(_ context.Context, input serv
 	conn.DisplayName = input.DisplayName
 	conn.Environment = input.Environment
 	conn.Labels = input.Labels
+	conn.Mode = input.Mode
+	conn.BaseURL = input.Endpoint
+	conn.AuthRef = input.AuthRef
+	conn.SyncEnabled = input.SyncEnabled
+	conn.SyncIntervalSeconds = input.SyncIntervalSeconds
+	conn.Metadata = map[string]any{"description": input.Description}
+	return conn, nil
+}
+
+func (fakeRuntimeConnectionService) Remove(context.Context, services.RemoveRuntimeInstanceInput) error {
+	return nil
+}
+
+func (fakeRuntimeConnectionService) ConsolidateEndpoint(_ context.Context, input services.ConsolidateRuntimeEndpointInput) (domain.RuntimeConnection, error) {
+	conn, err := fakeRuntimeConnectionService{}.Get(context.Background(), input.CanonicalID)
+	if err != nil {
+		return domain.RuntimeConnection{}, err
+	}
+	conn.Endpoints = []domain.RuntimeEndpoint{{
+		ID: "endpoint-1", RuntimeConnectionID: conn.ID, URL: conn.BaseURL,
+		Kind: domain.RuntimeEndpointCanonical, CreatedAt: conn.CreatedAt, UpdatedAt: conn.UpdatedAt,
+	}}
 	return conn, nil
 }
 

@@ -52,7 +52,7 @@ func corsMiddleware(next http.Handler, allowedOrigins []string) http.Handler {
 			if _, ok := allowed[origin]; ok {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Add("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
@@ -61,6 +61,22 @@ func corsMiddleware(next http.Handler, allowedOrigins []string) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func recoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Error("panic recovered",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", recovered,
+				)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "panic"})
+			}
+		}()
 		next.ServeHTTP(w, r)
 	})
 }

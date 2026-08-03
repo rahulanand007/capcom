@@ -53,7 +53,12 @@ func (c Client) Check(ctx context.Context, conn domain.RuntimeConnection) (*runt
 	}
 	return &runtimeadapter.CheckResult{
 		Status: domain.RuntimeStatusActive, Message: "langgraph agent server health check succeeded",
-		Capabilities: runtimeadapter.Capabilities{ReadAgents: true, ReadExecutions: true},
+		Capabilities: runtimeadapter.Capabilities{
+			ReadAgents:      true,
+			ReadExecutions:  true,
+			DeleteAgent:     conn.Mode == domain.RuntimeModeControlEnabled,
+			CancelExecution: conn.Mode == domain.RuntimeModeControlEnabled,
+		},
 		Metadata: map[string]any{"health": health, "version": info.Version,
 			"langgraph_py_version": info.LangGraphPyVersion, "flags": info.Flags, "server_metadata": info.Metadata},
 	}, nil
@@ -102,6 +107,26 @@ func (c Client) SetAgentStatus(context.Context, domain.RuntimeConnection, string
 	return nil, fmt.Errorf("langgraph agent server status control is not supported")
 }
 
+func (c Client) DeleteAgent(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string) error {
+	path := fmt.Sprintf("/assistants/%s", url.PathEscape(runtimeAgentID))
+	return c.doJSON(ctx, conn, http.MethodDelete, path, nil, nil)
+}
+
+func (c Client) CancelExecution(ctx context.Context, conn domain.RuntimeConnection, execution domain.RuntimeExecutionSnapshot) error {
+	if execution.Kind != "run" {
+		return fmt.Errorf("langgraph can only cancel run executions")
+	}
+	if strings.TrimSpace(execution.ParentRuntimeExecutionID) == "" {
+		return fmt.Errorf("langgraph run is missing its parent thread id")
+	}
+	path := fmt.Sprintf(
+		"/threads/%s/runs/%s/cancel?action=interrupt&wait=true",
+		url.PathEscape(execution.ParentRuntimeExecutionID),
+		url.PathEscape(execution.RuntimeExecutionID),
+	)
+	return c.doJSON(ctx, conn, http.MethodPost, path, nil, nil)
+}
+
 func (c Client) CollectSnapshot(ctx context.Context, conn domain.RuntimeConnection) (*domain.RuntimeSnapshot, error) {
 	check, err := c.Check(ctx, conn)
 	if err != nil {
@@ -120,7 +145,9 @@ func (c Client) CollectSnapshot(ctx context.Context, conn domain.RuntimeConnecti
 		ObservedAt: observedAt, Metadata: check.Metadata,
 		Capabilities: map[string]bool{"read_agents": true, "read_agent_hierarchy": false,
 			"read_agent_skills": false, "read_agent_access": false, "replace_agent_access": false,
-			"read_subagent_executions": false, "read_executions": true},
+			"read_subagent_executions": false, "read_executions": true,
+			"delete_agent":     conn.Mode == domain.RuntimeModeControlEnabled,
+			"cancel_execution": conn.Mode == domain.RuntimeModeControlEnabled},
 		Agents: make([]domain.SnapshotAgent, 0, len(agents)),
 	}
 	for _, agent := range agents {

@@ -26,6 +26,25 @@ const (
 	RuntimeStatusFailed   RuntimeStatus = "failed"
 )
 
+type RuntimeEndpointKind string
+
+const (
+	RuntimeEndpointCanonical RuntimeEndpointKind = "canonical"
+	RuntimeEndpointAlias     RuntimeEndpointKind = "alias"
+	RuntimeEndpointRelay     RuntimeEndpointKind = "relay"
+)
+
+type RuntimeEndpoint struct {
+	ID                        string
+	RuntimeConnectionID       string
+	URL                       string
+	Kind                      RuntimeEndpointKind
+	AuthRef                   string
+	SourceRuntimeConnectionID string
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+}
+
 type RuntimeConnection struct {
 	ID                  string
 	Name                string
@@ -48,4 +67,5 @@ type RuntimeConnection struct {
 	LastSyncFinishedAt  *time.Time
 	LastSyncDurationMS  int64
 	LastError           string
+	Endpoints           []RuntimeEndpoint
 }

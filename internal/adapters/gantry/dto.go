@@ -111,7 +111,7 @@ func (g *gantryAccess) UnmarshalJSON(data []byte) error {
 
 type gantrySelection struct {
 	ID      string `json:"id"`
-	Version string `json:"version"`
+	Version string `json:"version,omitempty"`
 }
 
 type gantryDoctor struct {

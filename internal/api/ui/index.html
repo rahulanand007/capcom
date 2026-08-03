@@ -6,6 +6,7 @@
   <title>Capcom Console</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/controls.css">
 </head>
 <body>
   <div class="app-shell">
@@ -55,8 +56,8 @@
         <div class="instance-context" id="agentInstanceContext"></div>
         <div class="section-heading"><div><span class="eyebrow">DURABLE INSTANCE STATE</span><h2>Agents</h2></div><div class="filter-row"><input id="agentSearch" type="search" placeholder="Search agents" aria-label="Search agents"><span class="count-label" id="agentCount">0 agents</span></div></div>
         <div class="table-wrap"><table><thead><tr><th>Agent</th><th>Type</th><th>Runtime ID</th><th>Status</th><th>Freshness</th><th>Description</th><th>Details</th></tr></thead><tbody id="agentTable"></tbody></table></div>
-        <div class="section-heading compact"><div><span class="eyebrow">EPHEMERAL RUNTIME ACTIVITY</span><h2>Subagent executions</h2></div><span class="count-label" id="subagentExecutionCount">0 executions</span></div>
-        <div class="table-wrap"><table><thead><tr><th>Subagent</th><th>Owner</th><th>Status</th><th>Parent run</th><th>Task</th><th>Observed</th></tr></thead><tbody id="subagentExecutionTable"></tbody></table></div>
+        <div class="section-heading compact"><div><span class="eyebrow">RUNTIME ACTIVITY</span><h2 id="runtimeActivityTitle">Subagent executions</h2></div><span class="count-label" id="subagentExecutionCount">0 executions</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Type</th><th>Owner</th><th>Status</th><th>Parent</th><th>Context</th><th>Observed</th><th>Action</th></tr></thead><tbody id="subagentExecutionTable"></tbody></table></div>
       </section>
     </main>
   </div>
@@ -69,7 +70,7 @@
     </form>
   </dialog>
   <dialog id="accessDialog" class="drawer-dialog">
-    <div class="drawer"><div class="dialog-heading"><div><span class="eyebrow">RUNTIME STATE</span><h2 id="accessAgentName">Agent details</h2></div><div class="filter-row"><button class="primary-button hidden" id="openAccessEditor">Edit access</button><button class="icon-button" id="closeAccessButton" title="Close" aria-label="Close">×</button></div></div><div class="access-meta" id="accessMeta"></div><div class="selection-list" id="selectionList"></div></div>
+    <div class="drawer"><div class="dialog-heading"><div><span class="eyebrow">RUNTIME STATE</span><h2 id="accessAgentName">Agent details</h2></div><div class="filter-row"><button class="secondary-button hidden" id="agentStatusButton">Disable</button><button class="danger-button hidden" id="deleteAgentButton">Delete</button><button class="primary-button hidden" id="openAccessEditor">Edit access</button><button class="icon-button" id="closeAccessButton" title="Close" aria-label="Close">×</button></div></div><div class="access-meta" id="accessMeta"></div><div class="selection-list" id="selectionList"></div></div>
   </dialog>
   <dialog id="syncDialog">
     <form method="dialog" id="syncForm">
@@ -90,7 +91,18 @@
       <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" id="confirmAccessButton" type="submit">Run validation</button></div>
     </form>
   </dialog>
+  <dialog id="controlActionDialog">
+    <form method="dialog" id="controlActionForm">
+      <div class="dialog-heading"><div><span class="eyebrow">CONTROL ACTION</span><h2 id="controlActionTitle">Runtime action</h2></div><button class="icon-button" value="cancel" title="Close" aria-label="Close">X</button></div>
+      <label class="field"><span>Actor</span><input id="controlActor" required autocomplete="username"></label>
+      <label class="field"><span>Reason</span><input id="controlReason" required></label>
+      <label class="field hidden" id="controlConfirmationField"><span>Runtime agent ID</span><input id="controlConfirmation" autocomplete="off"></label>
+      <label class="field"><span><input id="controlDryRun" type="checkbox" checked> Validate only</span></label>
+      <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" id="confirmControlActionButton" type="submit">Continue</button></div>
+    </form>
+  </dialog>
   <script src="/assets/app.js" defer></script>
   <script src="/assets/durable.js" defer></script>
+  <script src="/assets/controls.js" defer></script>
 </body>
 </html>

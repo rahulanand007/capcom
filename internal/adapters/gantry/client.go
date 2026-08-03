@@ -181,7 +181,7 @@ func (c Client) ListAgentDelegates(ctx context.Context, conn domain.RuntimeConne
 				"source":                  "configured",
 				"runtime_agent_id_source": "gantry_settings_folder",
 			},
-			Raw:                        map[string]any{"ref": ref},
+			Raw: map[string]any{"ref": ref},
 		})
 	}
 	return items, nil
@@ -557,9 +557,19 @@ func (c Client) ReplaceAgentAccess(ctx context.Context, conn domain.RuntimeConne
 		return nil, fmt.Errorf("runtime connection is read-only")
 	}
 
+	current, err := c.GetAgentAccess(ctx, conn, runtimeAgentID)
+	if err != nil {
+		return nil, fmt.Errorf("read current gantry access before replacement: %w", err)
+	}
+	sources, ok := current.Raw["sources"]
+	if !ok || sources == nil {
+		return nil, fmt.Errorf("current gantry access document does not contain sources")
+	}
+
 	path := fmt.Sprintf("/v1/agents/%s/access", url.PathEscape(runtimeAgentID))
 	body := map[string]any{
-		"selections": access.Selections,
+		"sources":    sources,
+		"selections": gantrySelections(access.Selections),
 	}
 
 	var response gantryAccess
@@ -574,6 +584,18 @@ func (c Client) ReplaceAgentAccess(ctx context.Context, conn domain.RuntimeConne
 		ObservedAt: time.Now().UTC(),
 		Source:     "gantry",
 	}, nil
+}
+
+func gantrySelections(selections []domain.AccessSelection) []gantrySelection {
+	result := make([]gantrySelection, 0, len(selections))
+	for _, selection := range selections {
+		version, _ := selection.Attributes["version"].(string)
+		result = append(result, gantrySelection{
+			ID:      strings.TrimSpace(selection.ID),
+			Version: strings.TrimSpace(version),
+		})
+	}
+	return result
 }
 
 func (c Client) SetAgentStatus(ctx context.Context, conn domain.RuntimeConnection, runtimeAgentID string, status domain.AgentStatus) (*domain.AgentSnapshot, error) {
@@ -598,6 +620,14 @@ func (c Client) SetAgentStatus(ctx context.Context, conn domain.RuntimeConnectio
 		RuntimeAgentID: response.ID, Kind: gantryAgentKind(response.ID), Name: response.DisplayName(),
 		Status: response.StatusDomain(), ObservedAt: time.Now().UTC(), Metadata: response.Raw,
 	}, nil
+}
+
+func (c Client) DeleteAgent(context.Context, domain.RuntimeConnection, string) error {
+	return fmt.Errorf("gantry agent deletion is not supported")
+}
+
+func (c Client) CancelExecution(context.Context, domain.RuntimeConnection, domain.RuntimeExecutionSnapshot) error {
+	return fmt.Errorf("gantry execution cancellation is not supported")
 }
 
 func normalizeDoctor(doctor gantryDoctor, observedAt time.Time) ([]domain.RuntimeDiagnosticSnapshot, domain.RuntimeStatus) {

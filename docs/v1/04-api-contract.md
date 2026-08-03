@@ -51,6 +51,8 @@ POST /v1/runtime-instances
 GET /v1/runtime-instances
 GET /v1/runtime-instances/{id}
 PATCH /v1/runtime-instances/{id}
+DELETE /v1/runtime-instances/{id}
+POST /v1/runtime-instances/{id}/endpoints/consolidate
 POST /v1/runtime-instances/{id}/test
 POST /v1/runtime-instances/{id}/sync
 GET /v1/runtime-instances/{id}/sync-runs
@@ -65,6 +67,31 @@ The explicit `/live/agents` route performs a diagnostic adapter read. Fleet-wide
 
 Runtime connection creation uses `auth_ref`, which must name a previously
 stored secret. Inline runtime credentials are rejected.
+
+`PATCH /v1/runtime-instances/{id}` updates one instance's mutable adapter
+settings: `display_name`, `environment`, `labels`, `description`, `endpoint`,
+`mode`, `auth_ref`, `sync_enabled`, and `sync_interval_seconds`. The request
+must include `actor` and `reason`; Capcom validates the endpoint and credential
+reference, persists the settings together, and appends a
+`runtime_instance.settings_updated` audit event.
+
+`DELETE /v1/runtime-instances/{id}` is an audited soft removal. It requires
+`actor`, `reason`, and `confirmation` exactly matching the instance stable key.
+The instance is disabled and omitted from active reads and workers; imported
+state, control actions, and audit history remain stored.
+
+`POST /v1/runtime-instances/{canonicalId}/endpoints/consolidate` converts an
+existing duplicate runtime record into an endpoint route of the canonical
+instance. The request requires `duplicate_runtime_instance_id`, `kind`
+(`alias` or `relay`), `actor`, `reason`, and `confirmation` exactly matching
+the duplicate stable key. Runtime types must match. The duplicate is disabled
+and archived with a reference to the canonical instance; its imported data and
+audit history remain retained.
+
+Runtime-instance responses include `endpoints[]`. Each endpoint has `id`,
+`endpoint`, `kind` (`canonical`, `alias`, or `relay`), `auth_ref`, timestamps,
+and an optional `source_runtime_instance_id`. Agents and sync schedules attach
+to the owning runtime instance, never to endpoint routes.
 
 The nested runtime-agent endpoints are live adapter inspection reads for
 diagnostics. The console uses the persisted fleet endpoints after a successful
@@ -208,10 +235,21 @@ Query parameters:
 ## Control Actions
 
 ```text
+POST /v1/agents/{id}/actions/reconcile-access
+POST /v1/agents/{id}/actions/set-status
+POST /v1/agents/{id}/actions/delete
+POST /v1/runtime-executions/{id}/actions/cancel
 POST /v1/control-actions
 GET /v1/control-actions
 GET /v1/control-actions/{id}
 ```
+
+
+The targeted action routes are the implemented V1 surface. Every request
+requires `actor`, `reason`, `idempotency_key`, and optional `dry_run`.
+Agent deletion also requires `confirmation` equal to the runtime agent ID.
+Execution cancellation accepts only persisted active run IDs and uses
+non-destructive interrupt semantics.
 
 Request:
 
@@ -235,6 +273,8 @@ disable_agent
 enable_agent
 replace_access
 restrict_capability
+delete_agent
+cancel_execution
 ```
 
 Response:
@@ -289,3 +329,21 @@ RUNTIME_UNAVAILABLE
 RUNTIME_REJECTED
 INTERNAL
 ```
+
+All non-success responses use one backend-owned envelope:
+
+```json
+{
+  "error": {
+    "code": "RUNTIME_UNAVAILABLE",
+    "message": "The runtime is unreachable. Confirm it is running and its endpoint is correct.",
+    "retryable": true
+  }
+}
+```
+
+Handlers may retain technical errors in server logs, but API responses must
+never expose database, network, endpoint, stack, or adapter implementation
+details. The router recovery boundary converts unhandled panics to the same
+`INTERNAL` envelope. The console displays the backend message and supplies only
+a generic fallback for failures that occur before an API response exists.

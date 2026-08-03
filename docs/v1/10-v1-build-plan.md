@@ -182,7 +182,8 @@ Manual tests:
 - signed Gantry webhook inbox, deduplication, and targeted-sync triggers
 - enforce mode
 - Kubernetes operator
-- LangGraph Agent Server audited control actions (read-only adapter implemented 2026-07-21)
+- LangGraph Agent Server invocation and broader lifecycle actions (assistant
+  deletion and run cancellation implemented 2026-07-29)
 - Amazon Bedrock AgentCore runtime adapter
 - Microsoft Foundry Agent Service runtime adapter
 - Vertex AI Agent Engine runtime adapter
