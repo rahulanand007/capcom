@@ -54,10 +54,12 @@ import {
   type AdapterModel,
 } from "@/lib/adapters"
 import { capcomApi } from "@/lib/api-client"
+import { buildAgentTopology, type AgentTopologyRow } from "@/lib/agent-topology"
 import {
   queryKeys,
   useCancelExecutionMutation,
   usePersistedAgentsQuery,
+  useRuntimeInstanceAgentDelegationsQuery,
   useRuntimeInstanceAgentsQuery,
   useRuntimeInstanceExecutionsQuery,
   useRuntimeInstancesQuery,
@@ -303,11 +305,27 @@ function InstanceGroup({
   const [open, setOpen] = React.useState(defaultOpen)
   const [syncOpen, setSyncOpen] = React.useState(false)
   const agentsQuery = useRuntimeInstanceAgentsQuery(item.instance.id)
+  const delegationsQuery = useRuntimeInstanceAgentDelegationsQuery(
+    item.instance.id
+  )
   const executionsQuery = useRuntimeInstanceExecutionsQuery(item.instance.id)
   const syncMutation = useSyncRuntimeInstanceMutation(item.instance.id)
-  const agents = agentsQuery.data ?? []
+  const agents = React.useMemo(() => agentsQuery.data ?? [], [agentsQuery.data])
+  const delegations = React.useMemo(
+    () => delegationsQuery.data ?? [],
+    [delegationsQuery.data]
+  )
   const executions = executionsQuery.data ?? []
-  const shownAgents = agents.slice(0, AGENT_PREVIEW_LIMIT)
+  const topology = React.useMemo(
+    () =>
+      buildAgentTopology(
+        agents,
+        delegations,
+        [item.instance]
+      ),
+    [agents, delegations, item.instance]
+  )
+  const shownTopology = topology.slice(0, AGENT_PREVIEW_LIMIT)
   const styles = statusClass(item.status)
   const updateLabel =
     item.status === "failed"
@@ -390,8 +408,8 @@ function InstanceGroup({
               fallback={item.instance.endpoint}
             />
             <AgentSubTable
-              loading={agentsQuery.isLoading}
-              agents={shownAgents}
+              loading={agentsQuery.isLoading || delegationsQuery.isLoading}
+              topology={shownTopology}
               totalAgents={agents.length}
               onAgentClick={onAgentClick}
             />
@@ -437,12 +455,12 @@ function InstanceGroup({
 
 function AgentSubTable({
   loading,
-  agents,
+  topology,
   totalAgents,
   onAgentClick,
 }: {
   loading: boolean
-  agents: PersistedAgent[]
+  topology: AgentTopologyRow[]
   totalAgents: number
   onAgentClick: (agent: PersistedAgent) => void
 }) {
@@ -466,11 +484,12 @@ function AgentSubTable({
         <TableBody>
           {loading ? (
             <AgentSkeletonRows columns={4} />
-          ) : agents.length ? (
-            agents.map((agent) => (
+          ) : topology.length ? (
+            topology.map((row) => (
               <AgentTableRow
-                key={agent.id}
-                agent={agent}
+                key={row.agent.id}
+                agent={row.agent}
+                topology={row}
                 onAgentClick={onAgentClick}
               />
             ))
@@ -486,9 +505,9 @@ function AgentSubTable({
           )}
         </TableBody>
       </Table>
-      {totalAgents > agents.length ? (
+      {totalAgents > topology.length ? (
         <div className="border-t border-[var(--sl)] px-[18px] py-3 font-hud text-[12px] text-[var(--fa)]">
-          Showing {agents.length} of {totalAgents} agents
+          Showing {topology.length} of {totalAgents} agents
         </div>
       ) : null}
     </div>
