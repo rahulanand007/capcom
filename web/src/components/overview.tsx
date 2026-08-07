@@ -2,11 +2,16 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Trash2 } from "lucide-react"
+import { MoreHorizontal, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { AddInstanceDialog } from "@/components/add-instance-dialog"
 import { RemoveInstanceDialog } from "@/components/remove-instance-dialog"
+import {
+  OperationalError,
+  PageHeader,
+  RuntimeSyncStatus,
+} from "@/components/operator-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -18,6 +23,12 @@ import {
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   buildAdaptersModel,
   statusClass,
   type AdapterModel,
@@ -27,6 +38,7 @@ import {
   usePersistedAgentsQuery,
   useRuntimeInstancesQuery,
   useSyncRuntimeInstanceMutation,
+  useSyncRuntimeInstancesMutation,
 } from "@/lib/api-hooks"
 import { cn } from "@/lib/utils"
 
@@ -55,19 +67,46 @@ export function Overview() {
     [agentsQuery.data, now, runtimeInstancesQuery.data]
   )
   const loading = runtimeInstancesQuery.isLoading || agentsQuery.isLoading
+  const instanceIDs = React.useMemo(
+    () => (runtimeInstancesQuery.data ?? []).map((instance) => instance.id),
+    [runtimeInstancesQuery.data]
+  )
+  const refreshAllMutation = useSyncRuntimeInstancesMutation(instanceIDs)
+
+  function refreshAll() {
+    refreshAllMutation.mutate(
+      {
+        actor: "local-operator",
+        reason: "Overview refresh of all runtime adapters",
+      },
+      {
+        onSuccess: (runs) =>
+          toast.success(
+            `${runs.length} instance${runs.length === 1 ? "" : "s"} refreshed`
+          ),
+      }
+    )
+  }
 
   return (
     <section className="flex flex-col gap-6">
-      <div>
-        <div className="capcom-eyebrow">Overview</div>
-        <h1 className="mt-1 text-[22px] font-bold leading-tight text-[var(--tx)]">
-          Runtime adapters
-        </h1>
-        <p className="mt-1 max-w-2xl text-[13px] text-[var(--mu)]">
-          Imported runtime state grouped by adapter, with freshness and sync
-          health derived from live Capcom API data.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Overview"
+        title="Runtime adapters"
+        description="Runtime availability and imported-state freshness across the fleet."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            className="font-hud text-xs hover:border-[var(--ac)] hover:text-[var(--ac)]"
+            disabled={loading || !instanceIDs.length || refreshAllMutation.isPending}
+            onClick={refreshAll}
+          >
+            <RefreshCw className={cn("size-3.5", refreshAllMutation.isPending && "animate-spin")} />
+            {refreshAllMutation.isPending ? "Refreshing all" : "Refresh all"}
+          </Button>
+        }
+      />
 
       {loading ? (
         <OverviewSkeleton />
@@ -79,7 +118,7 @@ export function Overview() {
           <button
             type="button"
             onClick={() => setAddInstanceOpen(true)}
-            className="min-h-[178px] rounded-xl border border-dashed border-[var(--hl)] bg-transparent p-4 text-left transition hover:border-[var(--ac)] hover:text-[var(--ac)]"
+            className="capcom-connect-card min-h-[178px] rounded-xl p-4 text-left transition hover:text-[var(--ac)]"
           >
             <div className="flex h-full flex-col justify-between">
               <div>
@@ -114,11 +153,36 @@ export function Overview() {
 
 function AdapterCard({ adapter }: { adapter: AdapterModel }) {
   const styles = statusClass(adapter.status)
+  const instanceIDs = React.useMemo(
+    () => adapter.instances.map((item) => item.instance.id),
+    [adapter.instances]
+  )
+  const refreshMutation = useSyncRuntimeInstancesMutation(instanceIDs)
+  const issue = adapter.instances.find((item) => item.status !== "ok")
+  const healthyInstances = adapter.instances.filter((item) => item.status === "ok").length
+
+  function refreshAdapter() {
+    refreshMutation.mutate(
+      {
+        actor: "local-operator",
+        reason: `Overview refresh of ${adapter.name}`,
+      },
+      {
+        onSuccess: () => toast.success(`${adapter.name} refreshed`),
+      }
+    )
+  }
 
   return (
-    <Link href={`/adapters/${adapter.id}`} className="block">
-      <Card className="min-h-[178px] border border-[var(--hl)] bg-[var(--el)] shadow-[var(--chi)] transition hover:border-[var(--ac)]">
-        <CardHeader>
+    <Card
+      data-status={adapter.status}
+      className="capcom-status-surface relative gap-0 overflow-hidden bg-[var(--el)] p-0 transition hover:-translate-y-px hover:border-[var(--ac)]"
+    >
+      <Link
+        href={`/adapters/${adapter.id}`}
+        className="flex min-h-[166px] flex-col gap-4 p-5 pb-11"
+      >
+        <CardHeader className="p-0">
           <CardTitle className="flex items-center gap-2 text-[15px]">
             <span className={cn("h-2 w-2 rounded-full", styles.dot)} />
             {adapter.name}
@@ -129,17 +193,45 @@ function AdapterCard({ adapter }: { adapter: AdapterModel }) {
             </Badge>
           </CardAction>
         </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-between gap-5">
+        <CardContent className="flex flex-1 flex-col justify-between gap-3 p-0">
           <div className="grid grid-cols-2 gap-3">
             <Metric label="instances" value={adapter.instanceCount} />
             <Metric label="agents" value={adapter.agentCount} />
           </div>
-          <div className={cn("font-hud text-[11px]", adapter.status === "ok" ? "text-[var(--mu)]" : styles.text)}>
-            {adapter.footer}
+          <div className="flex flex-wrap items-end justify-between gap-2 pr-8">
+            <div className="font-hud text-[11px] text-[var(--mu)]">
+              {healthyInstances}/{adapter.instanceCount} instances ready
+              <span className="text-[var(--fa)]"> · {issue ? issue.updated : adapter.instances[0]?.updated ?? "never"}</span>
+            </div>
+            {adapter.instances[0] ? (
+              <RuntimeSyncStatus
+                runtime={issue?.runtimeHealth ?? adapter.instances[0].runtimeHealth}
+                sync={issue?.syncHealth ?? adapter.instances[0].syncHealth}
+              />
+            ) : null}
           </div>
         </CardContent>
-      </Card>
-    </Link>
+      </Link>
+      {issue?.instance.last_error ? (
+        <div className="border-t border-[var(--sl)] px-4 py-2.5 pr-12">
+          <OperationalError error={issue.instance.last_error} compact />
+        </div>
+      ) : null}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        title={`Refresh ${adapter.name}`}
+        aria-label={`Refresh ${adapter.name}`}
+        className="absolute bottom-3 right-3 border border-[var(--hl)] bg-[var(--cv)]/60 text-[var(--mu)] shadow-[var(--chi)] hover:border-[var(--ac)] hover:text-[var(--ac)]"
+        disabled={refreshMutation.isPending}
+        onClick={refreshAdapter}
+      >
+        <RefreshCw
+          className={cn("size-3.5", refreshMutation.isPending && "animate-spin")}
+        />
+      </Button>
+    </Card>
   )
 }
 
@@ -163,8 +255,17 @@ function AttentionQueue({
   attention: AttentionItem[]
   loading: boolean
 }) {
+  const queueStatus = attention.some((item) => item.status === "failed")
+    ? "failed"
+    : attention.some((item) => item.status === "stale")
+      ? "stale"
+      : "ok"
+
   return (
-    <section className="rounded-xl border border-[var(--hl)] bg-[var(--el)] shadow-[var(--chi)]">
+    <section
+      data-status={queueStatus}
+      className="capcom-status-surface rounded-xl bg-[var(--el)]"
+    >
       <div className="flex items-center justify-between border-b border-[var(--sl)] px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Needs your attention</h2>
@@ -218,7 +319,16 @@ function AttentionRow({ item }: { item: AttentionItem }) {
               {item.adapterName}
             </span>
           </div>
-          <p className="mt-1 text-[13px] text-[var(--mu)]">{item.message}</p>
+          <div className="mt-1">
+            <RuntimeSyncStatus runtime={item.runtimeHealth} sync={item.syncHealth} />
+          </div>
+          {item.error ? (
+            <div className="mt-2">
+              <OperationalError error={item.error} />
+            </div>
+          ) : (
+            <p className="mt-1 text-[12px] text-[var(--mu)]">{item.message}</p>
+          )}
         </div>
       </div>
       <div className="flex justify-self-start gap-2 md:justify-self-end">
@@ -242,15 +352,20 @@ function AttentionRow({ item }: { item: AttentionItem }) {
         >
           {syncMutation.isPending ? "Importing" : item.action}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="font-hud text-xs text-red-300 hover:border-red-500/60 hover:bg-red-500/10 hover:text-red-200"
-          onClick={() => setRemoveOpen(true)}
-        >
-          <Trash2 className="size-3.5" />
-          Remove
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="outline" size="icon-sm" aria-label={`Actions for ${item.instanceName}`}>
+                <MoreHorizontal className="size-4" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="w-44 border border-[var(--hl)] bg-[var(--el)]">
+            <DropdownMenuItem variant="destructive" onClick={() => setRemoveOpen(true)}>
+              <Trash2 /> Remove instance
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <RemoveInstanceDialog
           instance={{
             id: item.instanceId,

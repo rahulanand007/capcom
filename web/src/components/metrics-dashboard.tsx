@@ -7,12 +7,15 @@ import {
   Clock3,
   Coins,
   Gauge,
+  Pause,
+  Play,
   Radio,
   RefreshCw,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/operator-ui"
 import {
   Dialog,
   DialogContent,
@@ -23,19 +26,45 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   useFleetTelemetryHealthQuery,
-  useMetricsSummaryQuery,
+  usePersistedAgentsQuery,
+  useRuntimeInstancesQuery,
+  useScopedMetricsQuery,
 } from "@/lib/api-hooks"
 import type { MetricSummary, TelemetryHealth } from "@/lib/api-types"
 import { cn } from "@/lib/utils"
 
 type MetricsRange = "24h" | "7d" | "30d"
 type DetailKind = "tokens" | "requests" | "models"
+type MetricsScope = "fleet" | "runtime" | "agent"
 
 export function MetricsDashboard() {
   const [range, setRange] = React.useState<MetricsRange>("24h")
   const [detail, setDetail] = React.useState<DetailKind | null>(null)
-  const query = useMetricsSummaryQuery(range)
-  const healthQuery = useFleetTelemetryHealthQuery()
+  const [live, setLive] = React.useState(true)
+  const [scope, setScope] = React.useState<MetricsScope>("fleet")
+  const [runtimeID, setRuntimeID] = React.useState("")
+  const [agentID, setAgentID] = React.useState("")
+  const instancesQuery = useRuntimeInstancesQuery()
+  const agentsQuery = usePersistedAgentsQuery()
+  const effectiveRuntimeID =
+    scope === "fleet" ? "" : runtimeID || instancesQuery.data?.[0]?.id || ""
+  const scopedAgents = React.useMemo(
+    () =>
+      (agentsQuery.data ?? []).filter(
+        (agent) =>
+          !effectiveRuntimeID || agent.runtime_connection_id === effectiveRuntimeID
+      ),
+    [agentsQuery.data, effectiveRuntimeID]
+  )
+  const effectiveAgentID =
+    scope === "agent" ? agentID || scopedAgents[0]?.id || "" : ""
+  const query = useScopedMetricsQuery(
+    range,
+    effectiveRuntimeID || undefined,
+    effectiveAgentID || undefined,
+    live
+  )
+  const healthQuery = useFleetTelemetryHealthQuery(live)
   const metrics = query.data
   const refreshing = query.isFetching || healthQuery.isFetching
   const refreshedAt = Math.max(query.dataUpdatedAt, healthQuery.dataUpdatedAt)
@@ -46,25 +75,29 @@ export function MetricsDashboard() {
 
   return (
     <section className="flex flex-col gap-5">
-      <header className="flex flex-col gap-4 border-b border-[var(--sl)] pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="capcom-eyebrow">Telemetry</div>
-          <h1 className="mt-1 text-[22px] font-bold leading-tight text-[var(--tx)]">
-            Metrics
-          </h1>
-          <p className="mt-1 max-w-2xl text-[13px] text-[var(--mu)]">
-            Fleet-wide token flow, request volume, model mix, latency, and cost.
-            Open any chart for its exact observations.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+      <PageHeader
+        eyebrow="Telemetry"
+        title="Metrics"
+        description="Live token flow, request volume, model mix, latency, and cost. Open any chart for exact observations."
+        actions={
+          <>
           <div className="flex items-center gap-2 font-hud text-[10px] text-[var(--fa)]">
-            <span className="size-1.5 rounded-full bg-[var(--ac)] shadow-[0_0_0_3px_var(--acd)]" />
-            Auto-refresh 30s
+            <span className={cn("size-1.5 rounded-full", live ? "bg-[var(--ac)] shadow-[0_0_0_3px_var(--acd)]" : "bg-[var(--fa)]")} />
+            {live ? "Live · 30s" : "Paused"}
             <span className="text-[var(--mu)]">
               {refreshedAt ? `updated ${relativeTime(new Date(refreshedAt).toISOString())}` : "connecting"}
             </span>
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 font-hud text-[11px]"
+            onClick={() => setLive((value) => !value)}
+          >
+            {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            {live ? "Pause" : "Resume live"}
+          </Button>
           <Button
             type="button"
             size="sm"
@@ -93,8 +126,59 @@ export function MetricsDashboard() {
               </Button>
             ))}
           </div>
+          </>
+        }
+      />
+
+      <div className="capcom-panel-surface flex flex-col gap-3 rounded-xl bg-[var(--el)] p-3 lg:flex-row lg:items-center">
+        <div className="flex rounded-lg bg-[var(--sf)] p-1">
+          {(["fleet", "runtime", "agent"] as const).map((item) => (
+            <Button
+              key={item}
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn("font-hud text-[11px] capitalize", scope === item && "bg-[var(--acd)] text-[var(--ac)]")}
+              onClick={() => setScope(item)}
+            >
+              {item === "runtime" ? "Runtime instance" : item}
+            </Button>
+          ))}
         </div>
-      </header>
+        {scope !== "fleet" ? (
+          <select
+            value={effectiveRuntimeID}
+            onChange={(event) => {
+              setRuntimeID(event.target.value)
+              setAgentID("")
+            }}
+            className="h-8 min-w-56 rounded-lg border border-[var(--hl)] bg-[var(--cv)] px-2.5 font-hud text-[11px] text-[var(--tx)] outline-none focus:border-[var(--ac)]"
+            aria-label="Runtime instance"
+          >
+            <option value="">Select a runtime instance</option>
+            {(instancesQuery.data ?? []).map((instance) => (
+              <option key={instance.id} value={instance.id}>{instance.display_name || instance.name}</option>
+            ))}
+          </select>
+        ) : null}
+        {scope === "agent" ? (
+          <select
+            value={effectiveAgentID}
+            onChange={(event) => setAgentID(event.target.value)}
+            disabled={!effectiveRuntimeID}
+            className="h-8 min-w-56 rounded-lg border border-[var(--hl)] bg-[var(--cv)] px-2.5 font-hud text-[11px] text-[var(--tx)] outline-none focus:border-[var(--ac)] disabled:opacity-50"
+            aria-label="Agent"
+          >
+            <option value="">Select an agent</option>
+            {scopedAgents.map((agent) => (
+              <option key={agent.id} value={agent.id}>{agent.name}</option>
+            ))}
+          </select>
+        ) : null}
+        <span className="ml-auto font-hud text-[10px] text-[var(--fa)]">
+          {scope === "fleet" ? "All runtimes" : scope === "runtime" ? "One runtime instance" : "One imported agent"}
+        </span>
+      </div>
 
       {query.isLoading ? (
         <MetricsSkeleton />

@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 
 import {
   buildAgentTopology,
+  collapseAgentTopology,
   filterAgentTopology,
 } from "./agent-topology.ts"
 import type {
@@ -34,15 +35,15 @@ describe("buildAgentTopology", () => {
 
     assert.deepEqual(rows.map((row) => row.agent.runtime_agent_id), [
       "a-main",
-      "z-main",
       "a-child",
+      "z-main",
       "z-child",
       "standalone",
     ])
     assert.deepEqual(rows.map((row) => row.role), [
       "main",
-      "main",
       "delegated",
+      "main",
       "delegated",
       "standalone",
     ])
@@ -96,6 +97,29 @@ describe("buildAgentTopology", () => {
   })
 })
 
+describe("collapseAgentTopology", () => {
+  it("hides only descendants of a collapsed branch", () => {
+    const rows = buildAgentTopology(
+      [
+        agent("alpha", "Alpha Main", "main"),
+        agent("alpha-child", "Alpha Child"),
+        agent("beta", "Beta Main", "main"),
+        agent("beta-child", "Beta Child"),
+      ],
+      [delegation("alpha", "alpha-child"), delegation("beta", "beta-child")],
+      [instance]
+    )
+
+    const visible = collapseAgentTopology(rows, new Set(["id-alpha"]))
+
+    assert.deepEqual(visible.map((row) => row.agent.runtime_agent_id), [
+      "alpha",
+      "beta",
+      "beta-child",
+    ])
+  })
+})
+
 describe("filterAgentTopology", () => {
   it("retains every orchestrator as context when a delegate matches", () => {
     const rows = buildAgentTopology(
@@ -111,10 +135,10 @@ describe("filterAgentTopology", () => {
 
     assert.deepEqual(filtered.map((row) => row.agent.runtime_agent_id), [
       "alpha",
-      "beta",
       "shared",
+      "beta",
     ])
-    assert.deepEqual(filtered.map((row) => row.contextOnly), [true, true, false])
+    assert.deepEqual(filtered.map((row) => row.contextOnly), [true, false, true])
   })
 })
 

@@ -219,7 +219,7 @@
 .capcom-content {
   min-width: 0;
   overflow: auto;
-  padding: 26px 32px;
+  padding: 20px 24px;
 }
 
 .capcom-view {
@@ -290,6 +290,66 @@
   padding: 20px;
 }
 
+.capcom-panel-surface,
+.capcom-status-surface {
+  border: 1px solid color-mix(in srgb, var(--hl) 82%, var(--tx) 18%);
+  box-shadow: var(--chi), 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.capcom-status-surface[data-status="ok"] {
+  border-color: color-mix(in srgb, var(--ac) 14%, var(--hl));
+  border-left: 2px solid color-mix(in srgb, var(--ac) 44%, var(--hl));
+  box-shadow: var(--chi), 0 6px 20px color-mix(in srgb, var(--ac) 4%, transparent);
+}
+
+.capcom-status-surface[data-status="stale"] {
+  border-color: color-mix(in srgb, var(--wn) 17%, var(--hl));
+  border-left: 2px solid color-mix(in srgb, var(--wn) 48%, var(--hl));
+  box-shadow: var(--chi), 0 6px 20px color-mix(in srgb, var(--wn) 4%, transparent);
+}
+
+.capcom-status-surface[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--dg) 17%, var(--hl));
+  border-left: 2px solid color-mix(in srgb, var(--dg) 48%, var(--hl));
+  box-shadow: var(--chi), 0 6px 20px color-mix(in srgb, var(--dg) 5%, transparent);
+}
+
+.capcom-status-surface[data-status="unknown"] {
+  border-color: color-mix(in srgb, var(--hl) 82%, var(--tx) 18%);
+}
+
+.capcom-status-surface[data-status="ok"]:hover {
+  border-color: color-mix(in srgb, var(--ac) 52%, var(--hl));
+  border-left-color: color-mix(in srgb, var(--ac) 82%, var(--hl));
+  box-shadow: var(--chi), 0 10px 30px color-mix(in srgb, var(--ac) 11%, transparent);
+}
+
+.capcom-status-surface[data-status="stale"]:hover {
+  border-color: color-mix(in srgb, var(--wn) 54%, var(--hl));
+  border-left-color: color-mix(in srgb, var(--wn) 84%, var(--hl));
+  box-shadow: var(--chi), 0 10px 30px color-mix(in srgb, var(--wn) 11%, transparent);
+}
+
+.capcom-status-surface[data-status="failed"]:hover {
+  border-color: color-mix(in srgb, var(--dg) 54%, var(--hl));
+  border-left-color: color-mix(in srgb, var(--dg) 84%, var(--hl));
+  box-shadow: var(--chi), 0 10px 30px color-mix(in srgb, var(--dg) 12%, transparent);
+}
+
+.capcom-connect-card {
+  border: 1px dashed color-mix(in srgb, var(--tx) 28%, var(--hl));
+  background: color-mix(in srgb, var(--el) 64%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 4%, transparent),
+    var(--chi);
+}
+
+.capcom-connect-card:hover {
+  border-color: color-mix(in srgb, var(--ac) 58%, var(--hl));
+  background: color-mix(in srgb, var(--acd) 34%, var(--el));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ac) 10%, transparent),
+    0 8px 24px color-mix(in srgb, var(--ac) 7%, transparent);
+}
+
 @media (max-width: 760px) {
   .capcom-shell {
     grid-template-columns: 1fr;
@@ -314,5 +374,16 @@
 
   .capcom-content {
     padding: 22px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

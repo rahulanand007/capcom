@@ -2,7 +2,20 @@
 
 import * as React from "react"
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query"
-import { Ban, ChevronDown, ChevronRight, GitBranch, RefreshCw } from "lucide-react"
+import {
+  Activity,
+  Ban,
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  MoreHorizontal,
+  Plug,
+  RefreshCw,
+  Settings2,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { AddInstanceDialog } from "@/components/add-instance-dialog"
@@ -12,7 +25,13 @@ import {
   EndpointTopology,
 } from "@/components/consolidate-instance-dialog"
 import { AgentDrilldownDrawer } from "@/components/agent-drilldown-drawer"
+import { RemoveInstanceDialog } from "@/components/remove-instance-dialog"
 import { RuntimeCatalogPanel } from "@/components/runtime-catalog-panel"
+import {
+  OperationalError,
+  PageHeader,
+  RuntimeSyncStatus,
+} from "@/components/operator-ui"
 import {
   AgentTableRow,
 } from "@/components/agent-table"
@@ -29,11 +48,19 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Collapsible,
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Table,
   TableBody,
@@ -51,10 +78,13 @@ import {
   relativeTime,
   statusClass,
   type AdapterInstance,
-  type AdapterModel,
 } from "@/lib/adapters"
 import { capcomApi } from "@/lib/api-client"
-import { buildAgentTopology, type AgentTopologyRow } from "@/lib/agent-topology"
+import {
+  buildAgentTopology,
+  collapseAgentTopology,
+  type AgentTopologyRow,
+} from "@/lib/agent-topology"
 import {
   queryKeys,
   useCancelExecutionMutation,
@@ -78,6 +108,7 @@ import type {
 import { cn } from "@/lib/utils"
 
 const AGENT_PREVIEW_LIMIT = 8
+type AdapterSection = "agents" | "health" | "capabilities" | "connection"
 
 function randomControlKey() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -92,6 +123,7 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
   const [addInstanceOpen, setAddInstanceOpen] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [consolidateOpen, setConsolidateOpen] = React.useState(false)
+  const [section, setSection] = React.useState<AdapterSection>("agents")
   const [selectedAgent, setSelectedAgent] = React.useState<PersistedAgent | null>(
     null
   )
@@ -186,69 +218,74 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
 
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[22px] font-bold leading-tight tracking-[-0.02em] text-[var(--tx)]">
-              {adapter.name}
-            </h1>
-            <Badge className={cn("font-hud text-[11px]", styles.badge)}>
-              {adapter.badge}
-            </Badge>
-          </div>
-          <p className="mt-1 text-[13px] text-[var(--mu)]">
-            {adapter.instanceCount} instances connected / {adapter.agentCount} agents running / state re-imported automatically every{" "}
-            {syncIntervalLabel(adapter.instances)}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
+      <PageHeader
+        eyebrow="Runtime adapter"
+        title={adapter.name}
+        badge={<Badge className={cn("font-hud text-[11px]", styles.badge)}>{adapter.badge}</Badge>}
+        description={`${adapter.instanceCount} instances · ${adapter.agentCount} agents · automatic import every ${syncIntervalLabel(adapter.instances)}`}
+        actions={
+          <>
           <Button
             variant="outline"
+            size="sm"
             className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
             onClick={() => setAddInstanceOpen(true)}
           >
             + Add instance
           </Button>
           <Button
-            variant="outline"
-            className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
-            onClick={() => setSettingsOpen(true)}
-          >
-            Adapter settings
-          </Button>
-          {adapter.instances.length > 1 ? (
-            <Button
-              variant="outline"
-              className="hover:border-[var(--ac)] hover:text-[var(--ac)]"
-              onClick={() => setConsolidateOpen(true)}
-            >
-              <GitBranch className="size-4" />
-              Consolidate connections
-            </Button>
-          ) : null}
-          <Button
+            size="sm"
             className="shadow-[0_0_0_3px_var(--glow)] hover:brightness-[1.08]"
             onClick={() => setSyncAllOpen(true)}
           >
             <RefreshCw className="size-4" />
-            Re-import all instances
+            Re-import all
           </Button>
-        </div>
-      </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" size="icon-sm" aria-label="Adapter actions">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-52 border border-[var(--hl)] bg-[var(--el)]">
+              <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                <Settings2 /> Adapter settings
+              </DropdownMenuItem>
+              {adapter.instances.length > 1 ? (
+                <DropdownMenuItem onClick={() => setConsolidateOpen(true)}>
+                  <GitBranch /> Consolidate connections
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          </>
+        }
+      />
 
-      <div className="flex flex-col gap-3.5">
-        {adapter.instances.map((item, index) => (
-          <InstanceGroup
-            key={item.instance.id}
-            item={item}
-            defaultOpen={index === 0}
-            onAgentClick={setSelectedAgent}
-          />
-        ))}
-      </div>
-
-      <PageFooter adapter={adapter} />
+      <Tabs value={section} onValueChange={(value) => setSection(value as AdapterSection)} className="gap-3">
+        <TabsList variant="line" className="w-full justify-start overflow-x-auto border-b border-[var(--sl)] pb-2">
+          <TabsTrigger value="agents" className="font-hud text-[12px]"><Users /> Agents</TabsTrigger>
+          <TabsTrigger value="health" className="font-hud text-[12px]"><Activity /> Runtime health</TabsTrigger>
+          <TabsTrigger value="capabilities" className="font-hud text-[12px]"><ShieldCheck /> Capabilities</TabsTrigger>
+          <TabsTrigger value="connection" className="font-hud text-[12px]"><Plug /> Connection</TabsTrigger>
+        </TabsList>
+        <TabsContent value={section} key={section}>
+          <div className="flex flex-col gap-3">
+            {adapter.instances.map((item, index) => (
+              <InstanceGroup
+                key={item.instance.id}
+                item={item}
+                section={section}
+                defaultOpen={index === 0}
+                onAgentClick={setSelectedAgent}
+                onConfigure={() => setSettingsOpen(true)}
+              />
+            ))}
+          </div>
+        </TabsContent>
+      </Tabs>
 
       <AgentDrilldownDrawer
         agent={selectedAgent}
@@ -295,15 +332,20 @@ export function AdapterDetail({ adapterId }: { adapterId: string }) {
 
 function InstanceGroup({
   item,
+  section,
   defaultOpen,
   onAgentClick,
+  onConfigure,
 }: {
   item: AdapterInstance
+  section: AdapterSection
   defaultOpen: boolean
   onAgentClick: (agent: PersistedAgent) => void
+  onConfigure: () => void
 }) {
   const [open, setOpen] = React.useState(defaultOpen)
   const [syncOpen, setSyncOpen] = React.useState(false)
+  const [removeOpen, setRemoveOpen] = React.useState(false)
   const agentsQuery = useRuntimeInstanceAgentsQuery(item.instance.id)
   const delegationsQuery = useRuntimeInstanceAgentDelegationsQuery(
     item.instance.id
@@ -334,7 +376,10 @@ function InstanceGroup({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <Card className="gap-0 border border-[var(--hl)] bg-[var(--el)] py-0 shadow-[var(--chi)]">
+      <Card
+        data-status={item.status}
+        className="capcom-status-surface gap-0 bg-[var(--el)] py-0"
+      >
         <div
           className="flex cursor-pointer flex-wrap items-center gap-3 px-[18px] py-3.5 transition hover:bg-[var(--sl)]"
           onClick={() => setOpen((value) => !value)}
@@ -364,6 +409,7 @@ function InstanceGroup({
           >
             {item.instance.environment || "unspecified"}
           </Badge>
+          <RuntimeSyncStatus runtime={item.runtimeHealth} sync={item.syncHealth} />
           <span className="font-hud text-[12px] text-[var(--mu)]">
             {agentsQuery.isLoading ? (
               "loading agents"
@@ -398,36 +444,78 @@ function InstanceGroup({
               <RefreshCw className="size-3.5" />
               Re-import
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Actions for ${item.instance.display_name || item.instance.name}`}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-48 border border-[var(--hl)] bg-[var(--el)]">
+                <DropdownMenuItem onClick={onConfigure}>
+                  <Settings2 /> Configure instance
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onClick={() => setRemoveOpen(true)}>
+                  <Trash2 /> Remove instance
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
         <CollapsibleContent>
           <div className="border-t border-[var(--sl)]">
-            <EndpointTopology
-              endpoints={item.instance.endpoints}
-              fallback={item.instance.endpoint}
-            />
-            <AgentSubTable
-              loading={agentsQuery.isLoading || delegationsQuery.isLoading}
-              topology={shownTopology}
-              totalAgents={agents.length}
-              onAgentClick={onAgentClick}
-            />
-            {item.instance.runtime_type === "gantry" ? (
-              <RuntimeCatalogPanel runtimeId={item.instance.id} />
+            {item.instance.last_error ? (
+              <div className="px-[18px] py-3">
+                <OperationalError error={item.instance.last_error} />
+              </div>
             ) : null}
-            {item.instance.runtime_type === "langgraph" || executions.length ? (
-              <RuntimeExecutionsPanel
-                loading={executionsQuery.isLoading}
-                executions={executions}
-                agents={agents}
-                instance={item.instance}
-              />
+            {section === "agents" ? (
+              <>
+                <AgentSubTable
+                  loading={agentsQuery.isLoading || delegationsQuery.isLoading}
+                  topology={shownTopology}
+                  totalAgents={agents.length}
+                  onAgentClick={onAgentClick}
+                />
+                {item.instance.runtime_type === "langgraph" || executions.length ? (
+                  <RuntimeExecutionsPanel
+                    loading={executionsQuery.isLoading}
+                    executions={executions}
+                    agents={agents}
+                    instance={item.instance}
+                  />
+                ) : null}
+              </>
             ) : null}
-            <InstanceCapabilityPanel instance={item.instance} />
+            {section === "health" ? (
+              <RuntimeCatalogPanel runtimeId={item.instance.id} view="health" />
+            ) : null}
+            {section === "capabilities" ? (
+              <RuntimeCatalogPanel runtimeId={item.instance.id} view="capabilities" />
+            ) : null}
+            {section === "connection" ? (
+              <>
+                <EndpointTopology endpoints={item.instance.endpoints} fallback={item.instance.endpoint} />
+                <InstanceCapabilityPanel instance={item.instance} />
+              </>
+            ) : null}
           </div>
         </CollapsibleContent>
       </Card>
+
+      <RemoveInstanceDialog
+        instance={item.instance}
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+      />
 
       <SyncDialog
         open={syncOpen}
@@ -464,6 +552,18 @@ function AgentSubTable({
   totalAgents: number
   onAgentClick: (agent: PersistedAgent) => void
 }) {
+  const [collapsedAgentIDs, setCollapsedAgentIDs] = React.useState<Set<string>>(
+    () => new Set()
+  )
+  const visibleTopology = React.useMemo(
+    () => collapseAgentTopology(topology, collapsedAgentIDs),
+    [collapsedAgentIDs, topology]
+  )
+  const parentAgentIDs = React.useMemo(
+    () => new Set(topology.flatMap((row) => row.delegatedBy.map((agent) => agent.id))),
+    [topology]
+  )
+
   return (
     <div>
       <Table className="table-fixed">
@@ -484,13 +584,23 @@ function AgentSubTable({
         <TableBody>
           {loading ? (
             <AgentSkeletonRows columns={4} />
-          ) : topology.length ? (
-            topology.map((row) => (
+          ) : visibleTopology.length ? (
+            visibleTopology.map((row) => (
               <AgentTableRow
                 key={row.agent.id}
                 agent={row.agent}
                 topology={row}
                 onAgentClick={onAgentClick}
+                hasChildren={parentAgentIDs.has(row.agent.id)}
+                expanded={!collapsedAgentIDs.has(row.agent.id)}
+                onToggle={() =>
+                  setCollapsedAgentIDs((current) => {
+                    const next = new Set(current)
+                    if (next.has(row.agent.id)) next.delete(row.agent.id)
+                    else next.add(row.agent.id)
+                    return next
+                  })
+                }
               />
             ))
           ) : (
@@ -505,9 +615,9 @@ function AgentSubTable({
           )}
         </TableBody>
       </Table>
-      {totalAgents > topology.length ? (
+      {totalAgents > visibleTopology.length ? (
         <div className="border-t border-[var(--sl)] px-[18px] py-3 font-hud text-[12px] text-[var(--fa)]">
-          Showing {topology.length} of {totalAgents} agents
+          Showing {visibleTopology.length} of {totalAgents} agents
         </div>
       ) : null}
     </div>
@@ -995,17 +1105,6 @@ function capabilityEntries(capabilities: RuntimeCapabilities) {
   ] as const
 }
 
-function PageFooter({ adapter }: { adapter: AdapterModel }) {
-  const first = adapter.instances[0]?.instance
-
-  return (
-    <p className="font-hud text-[12px] text-[var(--fa)]">
-      Connection: {first?.endpoint ?? "none"} / adapter v
-      {adapterVersion(adapter.instances.map((item) => item.instance))} / freshness budget 5m per instance
-    </p>
-  )
-}
-
 function AdapterDetailSkeleton() {
   return (
     <section className="flex flex-col gap-5">
@@ -1074,19 +1173,6 @@ function syncIntervalLabel(instances: AdapterInstance[]) {
   }
   const minutes = Math.round(seconds / 60)
   return `${minutes}m`
-}
-
-function adapterVersion(instances: RuntimeInstance[]) {
-  for (const instance of instances) {
-    const version =
-      instance.labels.adapter_version ??
-      instance.labels.runtime_version ??
-      instance.labels.version
-    if (version) {
-      return version
-    }
-  }
-  return "unknown"
 }
 
 function syncSummary(run: RuntimeSyncRun) {

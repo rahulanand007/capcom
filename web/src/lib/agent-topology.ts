@@ -170,40 +170,53 @@ function buildInstanceTopology(graph: InstanceGraph): AgentTopologyRow[] {
     return true
   }
 
-  const emitDescendants = (roots: PersistedAgent[]) => {
-    const queue = roots.map((agent) => ({ agent, depth: 0 }))
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      const current = queue[cursor]
-      const delegates = [...(outgoing.get(current.agent.id) ?? [])]
-        .map((id) => byID.get(id))
-        .filter((item): item is PersistedAgent => Boolean(item))
-        .filter((item) => item.kind !== "main")
-        .sort(compareAgents)
-      for (const delegate of delegates) {
-        if (emit(delegate, current.depth + 1)) {
-          queue.push({ agent: delegate, depth: current.depth + 1 })
-        }
-      }
-    }
+  const emitBranch = (root: PersistedAgent, depth: number) => {
+    if (!emit(root, depth)) return
+    const delegates = [...(outgoing.get(root.id) ?? [])]
+      .map((id) => byID.get(id))
+      .filter((item): item is PersistedAgent => Boolean(item))
+      .filter((item) => item.kind !== "main")
+      .sort(compareAgents)
+    delegates.forEach((delegate) => emitBranch(delegate, depth + 1))
   }
 
   const mainRoots = agents.filter((agent) => agent.kind === "main")
   const standaloneRoots = agents.filter(
     (agent) => agent.kind !== "main" && !(incoming.get(agent.id)?.size)
   )
-  mainRoots.forEach((root) => emit(root, 0))
-  emitDescendants(mainRoots)
+  mainRoots.forEach((root) => emitBranch(root, 0))
 
   for (const root of standaloneRoots) {
-    if (emit(root, 0)) emitDescendants([root])
+    emitBranch(root, 0)
   }
 
   // A closed cycle has no root. Emit it deterministically without recursing forever.
   for (const agent of agents) {
-    if (emit(agent, 0)) emitDescendants([agent])
+    emitBranch(agent, 0)
   }
 
   return result
+}
+
+export function collapseAgentTopology(
+  rows: AgentTopologyRow[],
+  collapsedAgentIDs: Set<string>
+) {
+  const visible: AgentTopologyRow[] = []
+  let hiddenBelowDepth: number | null = null
+
+  for (const row of rows) {
+    if (hiddenBelowDepth !== null && row.depth > hiddenBelowDepth) {
+      continue
+    }
+    hiddenBelowDepth = null
+    visible.push(row)
+    if (collapsedAgentIDs.has(row.agent.id)) {
+      hiddenBelowDepth = row.depth
+    }
+  }
+
+  return visible
 }
 
 function topologyRole(

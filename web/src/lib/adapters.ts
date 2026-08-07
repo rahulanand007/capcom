@@ -1,6 +1,8 @@
 import type { PersistedAgent, RuntimeInstance } from "@/lib/api-types"
 
 export type DerivedStatus = "ok" | "stale" | "failed"
+export type RuntimeHealth = "healthy" | "degraded" | "offline" | "unknown"
+export type SyncHealth = "fresh" | "syncing" | "stale" | "failed" | "never"
 
 export type AdapterInstance = {
   instance: RuntimeInstance
@@ -10,6 +12,8 @@ export type AdapterInstance = {
   updated: string
   agentCount: number
   needsAttention: boolean
+  runtimeHealth: RuntimeHealth
+  syncHealth: SyncHealth
 }
 
 export type AdapterModel = {
@@ -33,6 +37,9 @@ export type AttentionItem = {
   badge: "stale" | "failed"
   message: string
   action: string
+  error?: string
+  runtimeHealth: RuntimeHealth
+  syncHealth: SyncHealth
 }
 
 const FRESHNESS_BUDGET_MS = 5 * 60 * 1000
@@ -115,6 +122,9 @@ export function buildAdaptersModel(
         badge: item.status === "failed" ? ("failed" as const) : ("stale" as const),
         message: item.message,
         action: item.status === "failed" ? "Retry import" : "Re-import",
+        error: item.instance.last_error,
+        runtimeHealth: item.runtimeHealth,
+        syncHealth: item.syncHealth,
       }))
   )
 
@@ -233,16 +243,28 @@ function deriveInstance(
     ? new Date(instance.last_synced_at)
     : null
   const ageMs = lastSynced ? now.getTime() - lastSynced.getTime() : Infinity
-  const failed =
-    instance.status === "failed" ||
-    instance.last_sync_status === "failed" ||
-    Boolean(instance.last_error)
+  const runtimeHealth: RuntimeHealth =
+    instance.status === "active"
+      ? "healthy"
+      : instance.status === "failed"
+        ? "offline"
+        : instance.status === "degraded" || instance.status === "disabled"
+          ? "degraded"
+          : "unknown"
+  const syncHealth: SyncHealth =
+    instance.last_sync_status === "running"
+      ? "syncing"
+      : instance.last_sync_status === "failed" || Boolean(instance.last_error)
+        ? "failed"
+        : !lastSynced
+          ? "never"
+          : ageMs > freshnessBudgetMs
+            ? "stale"
+            : "fresh"
+  const failed = runtimeHealth === "offline" || syncHealth === "failed"
   const stale =
     !failed &&
-    (instance.status === "degraded" ||
-      instance.status === "disabled" ||
-      instance.status === "pending" ||
-      ageMs > freshnessBudgetMs)
+    (runtimeHealth !== "healthy" || syncHealth === "stale" || syncHealth === "never")
   const status: DerivedStatus = failed ? "failed" : stale ? "stale" : "ok"
   const updated = relativeTime(instance.last_synced_at, now)
   const name = instance.display_name || instance.name
@@ -261,5 +283,7 @@ function deriveInstance(
     updated,
     agentCount,
     needsAttention: status !== "ok",
+    runtimeHealth,
+    syncHealth,
   }
 }

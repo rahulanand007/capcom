@@ -26,7 +26,13 @@ import type {
 import { relativeTime } from "@/lib/adapters"
 import { cn } from "@/lib/utils"
 
-export function RuntimeCatalogPanel({ runtimeId }: { runtimeId: string }) {
+export function RuntimeCatalogPanel({
+  runtimeId,
+  view = "all",
+}: {
+  runtimeId: string
+  view?: "all" | "health" | "capabilities"
+}) {
   const diagnosticsQuery = useRuntimeInstanceDiagnosticsQuery(runtimeId)
   const inventoryQuery = useRuntimeInstanceInventoryQuery(runtimeId)
   const capabilitiesQuery = useRuntimeInstanceCapabilitiesQuery(runtimeId)
@@ -40,7 +46,11 @@ export function RuntimeCatalogPanel({ runtimeId }: { runtimeId: string }) {
         <div>
           <div className="capcom-eyebrow">Runtime catalog</div>
           <h3 className="text-[14px] font-semibold text-[var(--tx)]">
-            Diagnostics, inventory, and capabilities
+            {view === "health"
+              ? "Runtime health and doctor checks"
+              : view === "capabilities"
+                ? "Inventory and supported controls"
+                : "Diagnostics, inventory, and capabilities"}
           </h3>
         </div>
         <div className="flex flex-wrap items-center gap-2 font-hud text-[11px] text-[var(--fa)]">
@@ -52,7 +62,7 @@ export function RuntimeCatalogPanel({ runtimeId }: { runtimeId: string }) {
         </div>
       </div>
 
-      <div className="border-t border-[var(--sl)] px-[18px] py-3">
+      {view !== "capabilities" ? <div className="border-t border-[var(--sl)] px-[18px] py-3">
         <div className="mb-2 flex items-center gap-2">
           <Activity className="size-4 text-[var(--fa)]" />
           <span className="capcom-eyebrow">Doctor checks</span>
@@ -68,9 +78,9 @@ export function RuntimeCatalogPanel({ runtimeId }: { runtimeId: string }) {
         ) : (
           <p className="text-[12px] text-[var(--mu)]">No doctor checks imported.</p>
         )}
-      </div>
+      </div> : null}
 
-      <Tabs defaultValue="inventory" className="gap-0 border-t border-[var(--sl)]">
+      {view !== "health" ? <Tabs defaultValue="inventory" className="gap-0 border-t border-[var(--sl)]">
         <div className="px-[18px] py-2">
           <TabsList variant="line">
             <TabsTrigger value="inventory" className="font-hud text-[12px]">
@@ -87,7 +97,7 @@ export function RuntimeCatalogPanel({ runtimeId }: { runtimeId: string }) {
         <TabsContent value="capabilities">
           <CapabilityTable loading={capabilitiesQuery.isLoading} items={capabilities} />
         </TabsContent>
-      </Tabs>
+      </Tabs> : null}
     </section>
   )
 }

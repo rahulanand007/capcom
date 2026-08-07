@@ -187,20 +187,12 @@ export const capcomApi = {
       })}`
     ),
   getPersistedAgent: (id: string) => request<PersistedAgent>(`/v1/agents/${id}`),
-  getAgentMetrics: (id: string) =>
-    request<MetricSummary>(`/v1/agents/${id}/metrics?interval=1h`),
-  getMetricsSummary: (range: keyof typeof METRICS_RANGES = "24h") => {
-    const to = new Date()
-    const config = METRICS_RANGES[range]
-    const from = new Date(to.getTime() - config.durationMs)
-    return request<MetricSummary>(
-      `/v1/metrics/summary${searchParams({
-        from: from.toISOString(),
-        to: to.toISOString(),
-        interval: config.interval,
-      })}`
-    )
-  },
+  getAgentMetrics: (id: string, range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL(`/v1/agents/${id}/metrics`, range)),
+  getRuntimeMetrics: (id: string, range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL(`/v1/runtime-instances/${id}/metrics`, range)),
+  getMetricsSummary: (range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL("/v1/metrics/summary", range)),
   getRuntimeTelemetryHealth: (id: string) =>
     request<TelemetryHealth>(`/v1/runtime-instances/${id}/telemetry-health`),
   getFleetTelemetryHealth: async () => {
@@ -251,4 +243,15 @@ export const capcomApi = {
       method: "POST",
       body,
     }),
+}
+
+function metricsURL(path: string, range: keyof typeof METRICS_RANGES) {
+  const to = new Date()
+  const config = METRICS_RANGES[range]
+  const from = new Date(to.getTime() - config.durationMs)
+  return `${path}${searchParams({
+    from: from.toISOString(),
+    to: to.toISOString(),
+    interval: config.interval,
+  })}`
 }
