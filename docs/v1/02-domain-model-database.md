@@ -14,6 +14,10 @@
 | ControlAction | Operator-requested runtime mutation |
 | AuditLog | Immutable record of sync and mutation outcomes |
 | SecretRef | Local encrypted or external secret reference |
+| User | Email/password identity |
+| Organization | Tenant and ownership boundary |
+| Membership | User role in an organization |
+| Session | Revocable hashed browser session |
 
 ## ID Strategy
 
@@ -23,6 +27,25 @@
 - Agent names are display identifiers, not stable keys.
 
 ## Tables
+
+### Identity and tenant ownership
+
+Migrations `013_hosted_identity.sql` and `014_identity_lifecycle_fields.sql` add
+`users`, `password_credentials`, `organizations`, `organization_memberships`,
+and `user_sessions`. Password rows
+store Argon2id encoded hashes. Session rows store only SHA-256 hashes of opaque
+session and CSRF tokens with idle and absolute expiration timestamps.
+
+`runtime_connections`, `secrets`, and `audit_events` carry a non-null
+`organization_id`. Child runtime records inherit their tenant through the runtime
+foreign key and repository reads join that ownership boundary. Existing local
+records are assigned to the deterministic `capcom-local` bootstrap organization;
+the first signup claims its owner membership.
+
+Migration `015_tenant_resource_ownership.sql` also materializes non-null tenant
+ownership on agents, control actions, sync runs, normalized usage observations,
+and telemetry ingestion runs. Their write paths derive the organization from the
+referenced runtime connection; they never accept it from an API request.
 
 ### Runtime diagnostics and catalog
 
@@ -44,7 +67,8 @@ remain JSONB. A failed sync does not delete the last successful catalog.
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid pk | Internal id |
-| name | text unique | Stable instance key, for example `gantry-development` |
+| organization_id | uuid fk | Owning tenant |
+| name | text | Stable tenant-scoped instance key, for example `gantry-development` |
 | display_name | text | Mutable operator-facing name |
 | environment | text | Environment slug such as `development` or `production` |
 | labels_json | jsonb | Team, region, owner, and other display/filter labels |
@@ -67,8 +91,8 @@ remain JSONB. A failed sync does not delete the last successful catalog.
 
 Indexes:
 
-- unique `(name)`
-- unique normalized `(runtime_type, endpoint)`
+- unique `(organization_id, name)` for active instances
+- unique normalized `(organization_id, runtime_type, endpoint)` for active instances
 - index `(runtime_type, status)`
 - index `(environment, status)`
 
@@ -77,7 +101,8 @@ Indexes:
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid pk | Generated identifier |
-| name | text unique | Stable reference used by `runtime_connections.auth_ref` |
+| organization_id | uuid fk | Owning tenant |
+| name | text | Tenant-scoped stable reference used by `runtime_connections.auth_ref` |
 | ciphertext | bytea | Versioned AES-256-GCM payload; never returned by APIs |
 | created_at | timestamptz | Creation time |
 | updated_at | timestamptz | Last rotation time |

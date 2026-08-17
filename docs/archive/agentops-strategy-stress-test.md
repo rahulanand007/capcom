@@ -8,7 +8,7 @@ After reviewing the current landscape, the original strategy needs tightening. T
 
 > Build a declarative AgentOps governance and reconciliation layer for enterprise agents, starting with Gantry, using YAML desired state, runtime adapters, drift detection, and DevOps/security integrations.
 
-Note: Gantry was previously referred to as MyClaw in some internal notes. Use **Gantry** consistently in Capcom product, architecture, and MVP documentation.
+Use **Gantry** consistently in Capcom product, architecture, and MVP documentation.
 
 This is stronger than "agent monitoring dashboard" and more defensible than "generic AI agent control plane."
 

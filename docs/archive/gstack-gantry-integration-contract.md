@@ -2,9 +2,8 @@
 
 ## Source Snapshot
 
-Latest Gantry source checked from:
+Latest Gantry source checked from the upstream repository:
 
-- Local repo: `C:\Users\caw-dev\Desktop\myclaw`
 - Branch: `main`
 - Pulled to: `origin/main` fast-forward at commit `42c065a0`
 - Package: `@gantry/runtime@1.2.52`

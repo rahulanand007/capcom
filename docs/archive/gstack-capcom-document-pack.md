@@ -22,7 +22,7 @@ This pack turns the Capcom GStack idea into implementation-ready documentation. 
 
 - Use **Capcom** for the product name.
 - Use **Gantry** for the first runtime adapter.
-- Do not use MyClaw in Capcom-facing docs except when referring to old source paths or historical notes.
+- Use Gantry consistently in Capcom-facing documentation.
 - Treat Gantry as an integration proof, not the long-term product boundary.
 - Keep the MVP focused on desired state, runtime import, basic drift, safe control action, and audit.
 - Keep SDK/control API polling or streaming as the MVP event path.

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { usePathname } from "next/navigation"
 import {
   MutationCache,
   QueryCache,
@@ -16,6 +17,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { toUserFacingError } from "@/lib/errors"
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
   const [queryClient] = React.useState(
     () =>
       new QueryClient({
@@ -60,7 +62,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     >
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delay={250}>
-          <AppShell>{children}</AppShell>
+          {pathname === "/login" ? children : <AppShell>{children}</AppShell>}
           <Toaster position="bottom-right" richColors={false} />
         </TooltipProvider>
       </QueryClientProvider>

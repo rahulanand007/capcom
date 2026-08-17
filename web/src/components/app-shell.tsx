@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
 import {
@@ -23,6 +23,12 @@ import {
 } from "@/components/ui/collapsible"
 import { Separator } from "@/components/ui/separator"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -41,6 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [adaptersOpen, setAdaptersOpen] = React.useState(false)
   const [lastUpdate, setLastUpdate] = React.useState<Date | null>(null)
   const healthQuery = useHealthQuery()
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: capcomApi.me })
   const runtimeInstancesQuery = useRuntimeInstancesQuery()
   const agentsQuery = usePersistedAgentsQuery()
   const now = React.useMemo(
@@ -123,6 +130,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } else {
         toast.info("No stale or failed instances to re-import")
       }
+    },
+  })
+  const logoutMutation = useMutation({
+    mutationFn: capcomApi.logout,
+    onSuccess: () => {
+      queryClient.clear()
+      router.push("/login")
+      router.refresh()
     },
   })
 
@@ -257,9 +272,40 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className={cn("h-1.5 w-1.5 rounded-full", statusStyles.dot)} />
             {systemText}
           </div>
-          <div className="mt-2 font-hud text-[11px] text-[var(--fa)]">
-            v{healthQuery.data?.version ?? "unknown"} / go/capcom
-          </div>
+          {meQuery.data && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    className="mt-4 flex w-full items-center gap-2 rounded-lg border-t border-[var(--sl)] px-2 py-3 text-left transition-colors hover:bg-[var(--el)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]"
+                    aria-label="Open account menu"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium">{meQuery.data.organization.name}</div>
+                      <div className="truncate font-hud text-[10px] text-[var(--fa)]">{meQuery.data.user.email}</div>
+                    </div>
+                    <span className="font-hud text-[10px] text-[var(--fa)]" aria-hidden="true">^</span>
+                  </button>
+                }
+              />
+              <DropdownMenuContent
+                side="top"
+                align="start"
+                sideOffset={6}
+                className="border border-[var(--hl)] bg-[var(--el)]"
+              >
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={logoutMutation.isPending}
+                  onClick={() => logoutMutation.mutate()}
+                  className="font-hud text-[11px]"
+                >
+                  {logoutMutation.isPending ? "Logging out..." : "Log out"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </aside>
 

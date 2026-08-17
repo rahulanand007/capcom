@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { ChevronDown, ChevronRight } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -27,6 +28,9 @@ type AgentTableRowProps = {
   location?: AgentLocation
   topology?: AgentTopologyRow
   onAgentClick?: (agent: PersistedAgent) => void
+  hasChildren?: boolean
+  expanded?: boolean
+  onToggle?: () => void
 }
 
 export function AgentTableRow({
@@ -34,6 +38,9 @@ export function AgentTableRow({
   location,
   topology,
   onAgentClick,
+  hasChildren = false,
+  expanded = true,
+  onToggle,
 }: AgentTableRowProps) {
   return (
     <TableRow
@@ -41,8 +48,14 @@ export function AgentTableRow({
       className="cursor-pointer border-[var(--sl)] hover:bg-[var(--sl)]"
       onClick={() => onAgentClick?.(agent)}
     >
-      <TableCell className="min-w-[220px] px-[18px] py-3 whitespace-normal">
-        <AgentIdentity agent={agent} topology={topology} />
+      <TableCell className={cn("min-w-[220px] px-[18px] whitespace-normal", topology?.depth ? "py-2.5" : "py-3")}>
+        <AgentIdentity
+          agent={agent}
+          topology={topology}
+          hasChildren={hasChildren}
+          expanded={expanded}
+          onToggle={onToggle}
+        />
       </TableCell>
       {location ? (
         <TableCell className="min-w-[220px] px-[18px] py-3 whitespace-normal">
@@ -67,9 +80,15 @@ export function AgentTableRow({
 export function AgentIdentity({
   agent,
   topology,
+  hasChildren = false,
+  expanded = true,
+  onToggle,
 }: {
   agent: PersistedAgent
   topology?: AgentTopologyRow
+  hasChildren?: boolean
+  expanded?: boolean
+  onToggle?: () => void
 }) {
   const depth = Math.min(topology?.depth ?? 0, 4)
   const visibleOrchestrators = topology?.delegatedBy.slice(0, 2) ?? []
@@ -84,19 +103,35 @@ export function AgentIdentity({
       data-topology-depth={topology?.depth}
     >
       {depth > 0 ? (
-        <div
-          aria-hidden="true"
-          className="flex shrink-0 items-start pt-0.5 font-hud text-[12px] text-[var(--fa)]"
-        >
+        <div aria-hidden="true" className="relative mr-2 min-h-9 shrink-0" style={{ width: depth * 18 }}>
           {Array.from({ length: depth }).map((_, index) => (
-            <span key={index} className="inline-block w-[18px] text-center">
-              {index === depth - 1 ? "└─" : "│"}
-            </span>
+            <span
+              key={index}
+              className="absolute bottom-0 top-0 border-l border-[color-mix(in_srgb,var(--ac)_22%,var(--hl))]"
+              style={{ left: index * 18 + 7 }}
+            />
           ))}
+          <span
+            className="absolute top-[10px] h-3 w-3 border-b border-l border-[color-mix(in_srgb,var(--ac)_35%,var(--hl))]"
+            style={{ left: (depth - 1) * 18 + 7 }}
+          />
         </div>
       ) : null}
       <div className="flex min-w-0 flex-col gap-1.5">
         <div className="flex min-w-0 items-center gap-2">
+          {hasChildren ? (
+            <button
+              type="button"
+              className="flex size-5 shrink-0 items-center justify-center rounded border border-[var(--hl)] text-[var(--fa)] hover:border-[var(--ac)] hover:text-[var(--ac)]"
+              aria-label={`${expanded ? "Collapse" : "Expand"} ${agent.name} delegates`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggle?.()
+              }}
+            >
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            </button>
+          ) : null}
           <span className="truncate font-hud text-[13px] font-medium text-[var(--tx)]">
             {agent.name}
           </span>

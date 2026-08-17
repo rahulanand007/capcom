@@ -47,6 +47,7 @@ type RuntimeEndpoint struct {
 
 type RuntimeConnection struct {
 	ID                  string
+	OrganizationID      string
 	Name                string
 	DisplayName         string
 	Environment         string

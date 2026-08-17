@@ -2,12 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"capcom/internal/domain"
 )
 
 func TestWriteJSONSanitizesTechnicalErrors(t *testing.T) {
@@ -35,6 +39,52 @@ func TestPublicErrorMakesRuntimeFailureActionable(t *testing.T) {
 	}
 	if strings.Contains(response.Error.Message, "127.0.0.1") {
 		t.Fatalf("public message leaked endpoint: %q", response.Error.Message)
+	}
+}
+
+func TestWriteAPIErrorWithPreservesSafeFieldsAndSanitizesError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeAPIErrorWith(rec, http.StatusBadGateway, errors.New("GET http://internal.example/v1/health: token secret-value rejected"), map[string]any{"sync_run": map[string]string{"id": "run-1"}})
+
+	if strings.Contains(rec.Body.String(), "internal.example") || strings.Contains(rec.Body.String(), "secret-value") {
+		t.Fatalf("response leaked technical error: %s", rec.Body.String())
+	}
+	var response struct {
+		Error   publicErrorDetail `json:"error"`
+		SyncRun map[string]string `json:"sync_run"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Error.Code != "RUNTIME_UNAVAILABLE" || response.SyncRun["id"] != "run-1" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestRuntimeConnectionResponseSanitizesStoredError(t *testing.T) {
+	response := runtimeConnectionResponseFromDomain(domain.RuntimeConnection{
+		ID: "runtime-1", Name: "runtime", Kind: domain.RuntimeKindGantry,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		LastError: "GET http://private.internal/v1/health returned token=secret-value",
+	})
+
+	if strings.Contains(response.LastError, "private.internal") || strings.Contains(response.LastError, "secret-value") {
+		t.Fatalf("stored runtime error leaked: %q", response.LastError)
+	}
+	if response.LastError == "" {
+		t.Fatal("stored runtime error did not produce a public message")
+	}
+}
+
+func TestSyncResponseSanitizesStoredError(t *testing.T) {
+	response := syncRunResponse(domain.RuntimeSyncRun{
+		ID: "run-1", ErrorCode: "adapter_failed",
+		ErrorMessage: "dial private.internal:8787 with token secret-value",
+	})
+
+	message, _ := response["error_message"].(string)
+	if strings.Contains(message, "private.internal") || strings.Contains(message, "secret-value") {
+		t.Fatalf("stored sync error leaked: %q", message)
 	}
 }
 

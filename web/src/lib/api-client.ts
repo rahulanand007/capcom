@@ -56,6 +56,14 @@ async function request<T>(path: string, options: RequestOptions = {}) {
     headers.set("Content-Type", "application/json")
   }
 
+  if (options.method && !["GET", "HEAD", "OPTIONS"].includes(options.method)) {
+    const csrf = document.cookie
+      .split("; ")
+      .find((value) => value.startsWith("capcom_csrf="))
+      ?.split("=")[1]
+    if (csrf) headers.set("X-CSRF-Token", decodeURIComponent(csrf))
+  }
+
   const response = await fetch(url, {
     ...options,
     headers,
@@ -69,6 +77,9 @@ async function request<T>(path: string, options: RequestOptions = {}) {
     : await response.text()
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      window.location.assign("/login?expired=1")
+    }
     throw new ApiError(errorMessage(data, response.statusText), response.status, data)
   }
 
@@ -84,6 +95,7 @@ function errorMessage(data: unknown, fallback: string) {
   ) {
     return data.error
   }
+
   if (
     data &&
     typeof data === "object" &&
@@ -116,6 +128,12 @@ const METRICS_RANGES = {
 } as const
 
 export const capcomApi = {
+  signup: (email: string, password: string) =>
+    request<AuthResponse>("/auth/signup", { method: "POST", body: { email, password } }),
+  login: (email: string, password: string) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body: { email, password } }),
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+  me: () => request<AuthResponse>("/v1/me"),
   health: () => request<HealthResponse>("/healthz"),
   createSecret: (body: CreateSecretRequest) =>
     request("/v1/secrets", {
@@ -187,20 +205,12 @@ export const capcomApi = {
       })}`
     ),
   getPersistedAgent: (id: string) => request<PersistedAgent>(`/v1/agents/${id}`),
-  getAgentMetrics: (id: string) =>
-    request<MetricSummary>(`/v1/agents/${id}/metrics?interval=1h`),
-  getMetricsSummary: (range: keyof typeof METRICS_RANGES = "24h") => {
-    const to = new Date()
-    const config = METRICS_RANGES[range]
-    const from = new Date(to.getTime() - config.durationMs)
-    return request<MetricSummary>(
-      `/v1/metrics/summary${searchParams({
-        from: from.toISOString(),
-        to: to.toISOString(),
-        interval: config.interval,
-      })}`
-    )
-  },
+  getAgentMetrics: (id: string, range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL(`/v1/agents/${id}/metrics`, range)),
+  getRuntimeMetrics: (id: string, range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL(`/v1/runtime-instances/${id}/metrics`, range)),
+  getMetricsSummary: (range: keyof typeof METRICS_RANGES = "24h") =>
+    request<MetricSummary>(metricsURL("/v1/metrics/summary", range)),
   getRuntimeTelemetryHealth: (id: string) =>
     request<TelemetryHealth>(`/v1/runtime-instances/${id}/telemetry-health`),
   getFleetTelemetryHealth: async () => {
@@ -251,4 +261,21 @@ export const capcomApi = {
       method: "POST",
       body,
     }),
+}
+
+export type AuthResponse = {
+  user: { id: string; email: string }
+  organization: { id: string; name: string; slug: string }
+  role: string
+}
+
+function metricsURL(path: string, range: keyof typeof METRICS_RANGES) {
+  const to = new Date()
+  const config = METRICS_RANGES[range]
+  const from = new Date(to.getTime() - config.durationMs)
+  return `${path}${searchParams({
+    from: from.toISOString(),
+    to: to.toISOString(),
+    interval: config.interval,
+  })}`
 }

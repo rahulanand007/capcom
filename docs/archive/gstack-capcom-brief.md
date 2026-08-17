@@ -58,7 +58,7 @@ Out of scope:
 
 ## Key Product Decisions
 
-- Use Gantry consistently. Older internal notes may say MyClaw; Capcom docs should say Gantry.
+- Use Gantry consistently throughout Capcom documentation.
 - Keep Capcom runtime-agnostic even though Gantry is the first adapter.
 - Use SDK/control API first, not webhook-first, for the MVP.
 - Keep webhooks Phase 2 for cloud push delivery.

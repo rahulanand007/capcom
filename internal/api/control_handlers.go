@@ -51,11 +51,11 @@ func handleSetAgentStatus(cfg RouterConfig) http.HandlerFunc {
 			return
 		}
 		action, err := cfg.ControlActions.SetAgentStatus(r.Context(), services.SetAgentStatusInput{
-			AgentID: r.PathValue("id"), Status: req.Status, Actor: req.Actor, Reason: req.Reason,
+			AgentID: r.PathValue("id"), Status: req.Status, Actor: requestActor(r, req.Actor), Reason: req.Reason,
 			IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			writeAPIErrorWith(w, http.StatusBadRequest, err, map[string]any{"action": controlActionResponse(action)})
 			return
 		}
 		writeJSON(w, http.StatusOK, controlActionResponse(action))
@@ -79,10 +79,10 @@ func handleReconcileAgentAccess(cfg RouterConfig) http.HandlerFunc {
 		}
 		action, err := cfg.ControlActions.ReconcileAccess(r.Context(), services.ReconcileAccessInput{
 			AgentID: r.PathValue("id"), Access: domain.AccessDocument{Selections: selections, Source: "capcom"},
-			Actor: req.Actor, Reason: req.Reason, IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
+			Actor: requestActor(r, req.Actor), Reason: req.Reason, IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			writeAPIErrorWith(w, http.StatusBadRequest, err, map[string]any{"action": controlActionResponse(action)})
 			return
 		}
 		writeJSON(w, http.StatusOK, controlActionResponse(action))
@@ -101,11 +101,11 @@ func handleDeleteAgent(cfg RouterConfig) http.HandlerFunc {
 			return
 		}
 		action, err := cfg.ControlActions.DeleteAgent(r.Context(), services.DeleteAgentInput{
-			AgentID: r.PathValue("id"), Confirmation: req.Confirmation, Actor: req.Actor, Reason: req.Reason,
+			AgentID: r.PathValue("id"), Confirmation: req.Confirmation, Actor: requestActor(r, req.Actor), Reason: req.Reason,
 			IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			writeAPIErrorWith(w, http.StatusBadRequest, err, map[string]any{"action": controlActionResponse(action)})
 			return
 		}
 		writeJSON(w, http.StatusOK, controlActionResponse(action))
@@ -124,11 +124,11 @@ func handleCancelExecution(cfg RouterConfig) http.HandlerFunc {
 			return
 		}
 		action, err := cfg.ControlActions.CancelExecution(r.Context(), services.CancelExecutionInput{
-			ExecutionID: r.PathValue("id"), Actor: req.Actor, Reason: req.Reason,
+			ExecutionID: r.PathValue("id"), Actor: requestActor(r, req.Actor), Reason: req.Reason,
 			IdempotencyKey: req.IdempotencyKey, DryRun: req.DryRun,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "action": controlActionResponse(action)})
+			writeAPIErrorWith(w, http.StatusBadRequest, err, map[string]any{"action": controlActionResponse(action)})
 			return
 		}
 		writeJSON(w, http.StatusOK, controlActionResponse(action))

@@ -129,6 +129,32 @@ When Capcom runs in Docker, register
 `http://langgraph.internal:2024`, not loopback. The Compose API service maps
 `langgraph.internal` to the host gateway.
 
+### Capcom Connection Procedure
+
+1. Confirm `GET http://127.0.0.1:2024/ok` succeeds from the host. A connection
+   refusal means Agent Server is stopped, bound only to an inaccessible
+   interface, or registered with the wrong host/port.
+2. In the Capcom console, select **Connect an adapter** and choose runtime type
+   `langgraph`.
+3. Use `http://langgraph.internal:2024` when the Capcom API is in the repository
+   Compose stack. Use `http://127.0.0.1:2024` only when both processes run on the
+   host. Never register the browser URL or Studio URL as the runtime endpoint.
+4. Store a credential under a stable Capcom secret name. For local `langgraph
+   dev`, use a non-empty disposable placeholder because that server does not
+   validate `X-Api-Key`. For a LangSmith deployment, use a LangSmith API key for
+   the deployment organization. Do not place the key in the endpoint URL.
+5. Start with `read_only`, test the connection, and trigger a sync. Capcom should
+   import assistants plus recent threads/runs. Enable `control_enabled` only
+   after reviewing deletion and cancellation semantics.
+
+The upstream CLI defaults to host `127.0.0.1` and port `2024`; Docker access
+therefore requires the explicit `--host 0.0.0.0` flag used above. LangSmith
+deployments require `X-Api-Key`; the adapter supplies that header from encrypted
+Capcom secret storage. See LangChain's official
+[LangGraph CLI reference](https://docs.langchain.com/langsmith/cli),
+[local Agent Server guide](https://docs.langchain.com/oss/python/langgraph/local-server),
+and [Agent Server API authentication reference](https://docs.langchain.com/langsmith/server-api-ref).
+
 ## Live Verification
 
 After storing a secret and creating a `langgraph` runtime instance:

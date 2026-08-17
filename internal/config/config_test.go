@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,6 +120,34 @@ func TestLoadFromLookupRejectsInvalidDuration(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("LoadFromLookup returned nil error")
+	}
+}
+
+func TestLoadFromLookupRejectsAdminTokenInHostedMode(t *testing.T) {
+	values := map[string]string{
+		"CAPCOM_DEPLOYMENT_MODE": "hosted",
+		"CAPCOM_ADMIN_TOKEN":     "must-not-be-accepted",
+	}
+	_, err := LoadFromLookup(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	if err == nil || !strings.Contains(err.Error(), "CAPCOM_ADMIN_TOKEN must be unset") {
+		t.Fatalf("error = %v, want hosted admin-token rejection", err)
+	}
+}
+
+func TestLoadFromLookupRejectsInsecureCookiesInHostedMode(t *testing.T) {
+	values := map[string]string{
+		"CAPCOM_DEPLOYMENT_MODE": "hosted",
+		"CAPCOM_SECURE_COOKIES":  "false",
+	}
+	_, err := LoadFromLookup(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	if err == nil || !strings.Contains(err.Error(), "CAPCOM_SECURE_COOKIES must be true") {
+		t.Fatalf("error = %v, want hosted secure-cookie rejection", err)
 	}
 }
 

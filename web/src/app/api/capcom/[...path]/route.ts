@@ -16,7 +16,10 @@ async function proxyCapcomRequest(request: NextRequest, context: RouteContext) {
     upstreamUrl.search = request.nextUrl.search
 
     const headers = new Headers()
-    headers.set("Authorization", `Bearer ${process.env.CAPCOM_ADMIN_TOKEN ?? ""}`)
+    const cookie = request.headers.get("cookie")
+    if (cookie) headers.set("Cookie", cookie)
+    const csrf = request.headers.get("x-csrf-token")
+    if (csrf) headers.set("X-CSRF-Token", csrf)
 
     const contentType = request.headers.get("content-type")
     if (contentType) {
@@ -43,6 +46,9 @@ async function proxyCapcomRequest(request: NextRequest, context: RouteContext) {
     const upstreamContentType = upstream.headers.get("content-type")
     if (upstreamContentType) {
       responseHeaders.set("Content-Type", upstreamContentType)
+    }
+    for (const cookie of upstream.headers.getSetCookie()) {
+      responseHeaders.append("Set-Cookie", cookie)
     }
 
     const hasNoBody =
@@ -78,6 +84,10 @@ export function POST(request: NextRequest, context: RouteContext) {
 }
 
 export function PATCH(request: NextRequest, context: RouteContext) {
+  return proxyCapcomRequest(request, context)
+}
+
+export function PUT(request: NextRequest, context: RouteContext) {
   return proxyCapcomRequest(request, context)
 }
 

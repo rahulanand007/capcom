@@ -5,14 +5,18 @@ info:
   description: |
     Runtime-agnostic AgentOps control-plane API.
 
-    All `/v1/*` endpoints require `Authorization: Bearer <CAPCOM_ADMIN_TOKEN>`; only
-    `GET /healthz` is unauthenticated. Browser clients on a different origin (the Next.js
-    console) are supported via CORS: the allowed origins are configured with
+    Protected endpoints accept an opaque browser session cookie. Local automation
+    may explicitly enable `Authorization: Bearer <CAPCOM_ADMIN_TOKEN>`; hosted
+    deployments must leave it unset because it bypasses tenant membership. Browser
+    mutations also send `X-CSRF-Token`. Health, the JSON service root, signup, and
+    login are unauthenticated. The Go API serves no browser console assets.
+    Browser clients on a different origin (the Next.js console) are supported via CORS: the allowed origins are configured with
     `CAPCOM_CORS_ALLOWED_ORIGINS` (default `http://localhost:3000,http://127.0.0.1:3000`),
     and preflight `OPTIONS` requests return `204` without requiring admin auth.
 servers:
   - url: http://127.0.0.1:8080
 security:
+  - cookieAuth: []
   - bearerAuth: []
 paths:
   /healthz:
@@ -27,6 +31,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+  /auth/signup:
+    post:
+      security: []
+      summary: Create a user, personal organization, owner membership, and session
+      operationId: signup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthRequest" }
+      responses:
+        "201":
+          description: Account and session created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /auth/login:
+    post:
+      security: []
+      summary: Authenticate with email and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthRequest" }
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/logout:
+    post:
+      summary: Revoke the current browser session
+      operationId: logout
+      responses:
+        "204": { description: Session revoked }
+  /v1/me:
+    get:
+      summary: Get the current user, organization, and role
+      operationId: getCurrentUser
+      responses:
+        "200":
+          description: Current session identity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
   /v1/secrets:
     post:
       summary: Store an encrypted secret
@@ -829,6 +885,10 @@ paths:
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: capcom_session
     bearerAuth:
       type: http
       scheme: bearer
@@ -864,6 +924,31 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
   schemas:
+    AuthRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 15, maxLength: 128, format: password }
+    AuthResponse:
+      type: object
+      required: [user, organization, role]
+      properties:
+        user:
+          type: object
+          required: [id, email]
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string, format: email }
+        organization:
+          type: object
+          required: [id, name, slug]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            slug: { type: string }
+        role: { type: string, enum: [owner, admin, operator, viewer] }
     HealthResponse:
       type: object
       required: [status, service, version]

@@ -68,6 +68,8 @@ export const queryKeys = {
   agentDelegations: (id: string) => ["agents", id, "delegations"] as const,
   agentMetrics: (id: string) => ["agents", id, "metrics"] as const,
   metricsSummary: (range: string) => ["metrics", "summary", range] as const,
+  scopedMetrics: (range: string, runtimeID?: string, agentID?: string) =>
+    ["metrics", "scope", range, runtimeID ?? "fleet", agentID ?? "all"] as const,
   telemetryHealth: ["metrics", "telemetry-health"] as const,
   subagentExecutions: (runtimeConnectionId?: string, agentId?: string) =>
     [
@@ -266,12 +268,32 @@ export function useMetricsSummaryQuery(range: "24h" | "7d" | "30d") {
   })
 }
 
-export function useFleetTelemetryHealthQuery() {
+export function useScopedMetricsQuery(
+  range: "24h" | "7d" | "30d",
+  runtimeID?: string,
+  agentID?: string,
+  live = true
+) {
+  return useQuery<MetricSummary>({
+    queryKey: queryKeys.scopedMetrics(range, runtimeID, agentID),
+    queryFn: () =>
+      agentID
+        ? capcomApi.getAgentMetrics(agentID, range)
+        : runtimeID
+          ? capcomApi.getRuntimeMetrics(runtimeID, range)
+          : capcomApi.getMetricsSummary(range),
+    refetchInterval: live ? 30_000 : false,
+    refetchIntervalInBackground: live,
+    staleTime: 15_000,
+  })
+}
+
+export function useFleetTelemetryHealthQuery(live = true) {
   return useQuery<TelemetryHealth[]>({
     queryKey: queryKeys.telemetryHealth,
     queryFn: capcomApi.getFleetTelemetryHealth,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: live ? 30_000 : false,
+    refetchIntervalInBackground: live,
     staleTime: 15_000,
   })
 }
@@ -424,6 +446,35 @@ export function useSyncRuntimeInstanceMutation(id: string) {
         queryClient.invalidateQueries({ queryKey: queryKeys.persistedAgents() }),
         queryClient.invalidateQueries({
           queryKey: queryKeys.runtimeInstanceSyncRuns(id),
+        }),
+      ])
+    },
+  })
+}
+
+export function useSyncRuntimeInstancesMutation(ids: string[]) {
+  const queryClient = useQueryClient()
+
+  return useMutation<RuntimeSyncRun[], Error, SyncRuntimeRequest>({
+    mutationFn: (body) =>
+      Promise.all(ids.map((id) => capcomApi.syncRuntimeInstance(id, body))),
+    onSuccess: async (runs) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstances }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.persistedAgents() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.subagentExecutions() }),
+        ...runs.flatMap((run) => {
+          const id = run.runtime_connection_id
+          return [
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstance(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceAgents(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceExecutions(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceDiagnostics(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceInventory(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceCapabilities(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceAgentDelegations(id) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.runtimeInstanceSyncRuns(id) }),
+          ]
         }),
       ])
     },

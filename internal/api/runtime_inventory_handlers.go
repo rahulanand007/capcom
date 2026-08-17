@@ -10,7 +10,7 @@ func handleListRuntimeDiagnostics(cfg RouterConfig) http.HandlerFunc {
 		}
 		items, err := cfg.RuntimeSync.ListRuntimeDiagnostics(r.Context(), r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(items))
@@ -31,7 +31,7 @@ func handleListRuntimeInventory(cfg RouterConfig) http.HandlerFunc {
 		}
 		items, err := cfg.RuntimeSync.ListRuntimeInventory(r.Context(), r.PathValue("id"), r.URL.Query().Get("kind"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(items))
@@ -52,7 +52,7 @@ func handleListRuntimeCapabilities(cfg RouterConfig) http.HandlerFunc {
 		}
 		items, err := cfg.RuntimeSync.ListRuntimeCapabilities(r.Context(), r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(items))

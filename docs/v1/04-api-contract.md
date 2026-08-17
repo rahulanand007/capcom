@@ -10,16 +10,34 @@
 
 ## Auth
 
-V1 uses a single admin token:
+Browser authentication endpoints:
+
+```text
+POST /auth/signup
+POST /auth/login
+POST /auth/logout
+GET /v1/me
+```
+
+Signup and login issue an opaque `capcom_session` HttpOnly cookie and a readable
+`capcom_csrf` cookie. Browser mutations send the CSRF value in
+`X-CSRF-Token`. Protected responses are private and non-cacheable. The API derives
+the organization and audit actor from the authenticated session rather than a
+client-supplied tenant identifier.
+
+Local CLI and automation compatibility may explicitly opt into:
 
 ```text
 Authorization: Bearer <CAPCOM_ADMIN_TOKEN>
 ```
 
-All API endpoints require auth except `GET /healthz`. The static console shell at
-`GET /` and `/assets/*` is public, but it contains no control-plane data. The
-console sends the admin token for every protected data request and retains it in
-browser session storage only.
+`CAPCOM_ADMIN_TOKEN` is disabled when unset and must remain unset in hosted
+deployments because it grants platform-wide access outside tenant membership.
+The backend rejects a non-empty token when `CAPCOM_DEPLOYMENT_MODE=hosted`.
+
+All API endpoints require authentication except health, the JSON service root,
+signup, and login. The Go API serves no console assets. The Next.js console
+forwards cookies and CSRF headers; it does not inject or retain an admin token.
 
 ## System
 
@@ -342,8 +360,12 @@ All non-success responses use one backend-owned envelope:
 }
 ```
 
-Handlers may retain technical errors in server logs, but API responses must
+The shared backend error writer records only status and public error code. API responses must
 never expose database, network, endpoint, stack, or adapter implementation
-details. The router recovery boundary converts unhandled panics to the same
+details. This applies to direct failures and errors embedded in action, sync,
+runtime-connection, and telemetry responses. The router recovery boundary converts unhandled panics to the same
 `INTERNAL` envelope. The console displays the backend message and supplies only
 a generic fallback for failures that occur before an API response exists.
+Services may emit separately redacted, request-correlated diagnostics; the error
+writer never logs `err.Error()` because adapter bodies may contain credentials or
+customer data.

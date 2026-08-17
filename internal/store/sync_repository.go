@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
 type SyncRepository struct {
@@ -51,8 +52,8 @@ func (r SyncRepository) CreateRun(ctx context.Context, run domain.RuntimeSyncRun
 	}
 	run.Status = domain.SyncStatusRunning
 	if _, err := r.db.ExecContext(ctx, `
-INSERT INTO runtime_sync_runs (id, runtime_connection_id, trigger, status, started_at)
-VALUES ($1, $2, $3, $4, $5)`, run.ID, run.RuntimeConnectionID, run.Trigger, run.Status, run.StartedAt); err != nil {
+INSERT INTO runtime_sync_runs (id, runtime_connection_id, organization_id, trigger, status, started_at)
+SELECT $1, $2, organization_id, $3, $4, $5 FROM runtime_connections WHERE id=$2 AND ($6='' OR organization_id=$6::uuid)`, run.ID, run.RuntimeConnectionID, run.Trigger, run.Status, run.StartedAt, tenant.OrganizationID(ctx)); err != nil {
 		return domain.RuntimeSyncRun{}, fmt.Errorf("create sync run: %w", err)
 	}
 	_, err := r.db.ExecContext(ctx, `
@@ -326,8 +327,8 @@ WHERE runtime_connection_id = $1 AND runtime_agent_id = $2`, run.RuntimeConnecti
 		if err != nil {
 			return "", err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO agents (id, name, status, metadata_json)
-VALUES ($1, $2, $3, $4::jsonb)`, agentID, snapshot.Name, snapshot.Status, string(metadata)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agents (id, organization_id, name, status, metadata_json)
+SELECT $1, organization_id, $2, $3, $4::jsonb FROM runtime_connections WHERE id=$5 AND ($6='' OR organization_id=$6::uuid)`, agentID, snapshot.Name, snapshot.Status, string(metadata), run.RuntimeConnectionID, tenant.OrganizationID(ctx)); err != nil {
 			return "", fmt.Errorf("insert snapshot agent: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runtime_bindings
@@ -416,7 +417,7 @@ func (r SyncRepository) ListRuns(ctx context.Context, runtimeID string, limit in
 finished_at, COALESCE(duration_ms,0), agents_seen, skills_seen, bindings_seen, access_documents_seen, executions_seen,
 diagnostics_seen, inventory_seen, capabilities_seen, delegations_seen,
 COALESCE(error_code,''), COALESCE(error_message,'') FROM runtime_sync_runs
-WHERE runtime_connection_id=$1 ORDER BY started_at DESC LIMIT $2`, runtimeID, limit)
+WHERE runtime_connection_id=$1 AND ($3='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_sync_runs.runtime_connection_id AND rc.organization_id=$3::uuid)) ORDER BY started_at DESC LIMIT $2`, runtimeID, limit, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list sync runs: %w", err)
 	}
@@ -445,7 +446,7 @@ func (r SyncRepository) GetRun(ctx context.Context, runtimeID, runID string) (do
 	err := r.db.QueryRowContext(ctx, `SELECT id,runtime_connection_id,trigger,status,started_at,finished_at,
 COALESCE(duration_ms,0),agents_seen,skills_seen,bindings_seen,access_documents_seen,executions_seen,
 diagnostics_seen,inventory_seen,capabilities_seen,delegations_seen,
-COALESCE(error_code,''),COALESCE(error_message,'') FROM runtime_sync_runs WHERE runtime_connection_id=$1 AND id=$2`, runtimeID, runID).Scan(
+COALESCE(error_code,''),COALESCE(error_message,'') FROM runtime_sync_runs WHERE runtime_connection_id=$1 AND id=$2 AND ($3='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_sync_runs.runtime_connection_id AND rc.organization_id=$3::uuid))`, runtimeID, runID, tenant.OrganizationID(ctx)).Scan(
 		&run.ID, &run.RuntimeConnectionID, &run.Trigger, &run.Status, &run.StartedAt, &finished, &run.DurationMS, &run.AgentsSeen,
 		&run.SkillsSeen, &run.BindingsSeen, &run.AccessDocumentsSeen, &run.ExecutionsSeen,
 		&run.DiagnosticsSeen, &run.InventorySeen, &run.CapabilitiesSeen, &run.DelegationsSeen, &run.ErrorCode, &run.ErrorMessage)
@@ -467,7 +468,7 @@ WHEN rc.last_sync_at < now() - make_interval(secs => rc.sync_interval_seconds) T
 FROM agents a JOIN agent_runtime_bindings b ON b.agent_id=a.id
 JOIN runtime_connections rc ON rc.id=b.runtime_connection_id
 WHERE rc.archived_at IS NULL
-AND ($1='' OR b.runtime_connection_id=$1::uuid) ORDER BY a.name`, runtimeID)
+AND ($1='' OR b.runtime_connection_id=$1::uuid) AND ($2='' OR rc.organization_id=$2::uuid) ORDER BY a.name`, runtimeID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list persisted agents: %w", err)
 	}
@@ -542,7 +543,7 @@ func (r SyncRepository) MarkAgentDeleted(ctx context.Context, agentID string) er
 metadata_json=COALESCE(metadata_json,'{}'::jsonb) || jsonb_build_object(
   'runtime_deleted', true,
   'runtime_deleted_at', CURRENT_TIMESTAMP
-), updated_at=CURRENT_TIMESTAMP WHERE id=$1::uuid`, agentID)
+), updated_at=CURRENT_TIMESTAMP WHERE id=$1::uuid AND ($2='' OR EXISTS(SELECT 1 FROM agent_runtime_bindings b JOIN runtime_connections rc ON rc.id=b.runtime_connection_id WHERE b.agent_id=agents.id AND rc.organization_id=$2::uuid))`, agentID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return fmt.Errorf("mark persisted agent deleted: %w", err)
 	}
@@ -562,7 +563,8 @@ delegate_runtime_agent_id,delegate_ref,tool_name,display_name,persona,configured
 observed_at,metadata_json,raw_runtime_json FROM agent_delegations
 WHERE ($1='' OR runtime_connection_id=$1::uuid)
 AND ($2='' OR orchestrator_runtime_agent_id=$2 OR delegate_runtime_agent_id=$2)
-ORDER BY orchestrator_runtime_agent_id,display_name,delegate_ref`, runtimeID, runtimeAgentID)
+AND ($3='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=agent_delegations.runtime_connection_id AND rc.organization_id=$3::uuid))
+ORDER BY orchestrator_runtime_agent_id,display_name,delegate_ref`, runtimeID, runtimeAgentID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list agent delegations: %w", err)
 	}
@@ -589,7 +591,8 @@ func (r SyncRepository) ListSubagentExecutions(ctx context.Context, runtimeID, a
 runtime_agent_id,subagent_type,status,description,summary,started_at,ended_at,observed_at,metadata_json,raw_runtime_json
 FROM subagent_executions WHERE ($1='' OR runtime_connection_id=$1::uuid)
 AND ($2='' OR runtime_agent_id=(SELECT runtime_agent_id FROM agent_runtime_bindings WHERE agent_id=$2::uuid))
-ORDER BY observed_at DESC LIMIT 200`, runtimeID, agentID)
+AND ($3='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=subagent_executions.runtime_connection_id AND rc.organization_id=$3::uuid))
+ORDER BY observed_at DESC LIMIT 200`, runtimeID, agentID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list subagent executions: %w", err)
 	}
@@ -625,7 +628,7 @@ func (r SyncRepository) ListRuntimeExecutions(ctx context.Context, runtimeID, ag
 COALESCE(parent_runtime_execution_id,''),runtime_agent_id,kind,status,started_at,ended_at,observed_at,
 metadata_json,raw_runtime_json FROM runtime_executions
 WHERE ($1='' OR runtime_connection_id=$1::uuid) AND ($2='' OR runtime_agent_id=$2)
-AND ($3='' OR kind=$3) ORDER BY observed_at DESC LIMIT $4`, runtimeID, agentID, kind, limit)
+AND ($3='' OR kind=$3) AND ($5='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_executions.runtime_connection_id AND rc.organization_id=$5::uuid)) ORDER BY observed_at DESC LIMIT $4`, runtimeID, agentID, kind, limit, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list runtime executions: %w", err)
 	}
@@ -659,7 +662,7 @@ func (r SyncRepository) GetRuntimeExecution(ctx context.Context, executionID str
 	var metadata, raw []byte
 	err := r.db.QueryRowContext(ctx, `SELECT id,runtime_connection_id,runtime_execution_id,
 COALESCE(parent_runtime_execution_id,''),runtime_agent_id,kind,status,started_at,ended_at,observed_at,
-metadata_json,raw_runtime_json FROM runtime_executions WHERE id=$1::uuid`, executionID).Scan(
+metadata_json,raw_runtime_json FROM runtime_executions WHERE id=$1::uuid AND ($2='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_executions.runtime_connection_id AND rc.organization_id=$2::uuid))`, executionID, tenant.OrganizationID(ctx)).Scan(
 		&item.ID, &item.RuntimeConnectionID, &item.RuntimeExecutionID,
 		&item.ParentRuntimeExecutionID, &item.RuntimeAgentID, &item.Kind, &item.Status, &started,
 		&ended, &item.ObservedAt, &metadata, &raw,

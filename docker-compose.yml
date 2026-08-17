@@ -1,22 +1,22 @@
 # Local Capcom stack: Postgres + migrations + Go API + Next.js console.
-# Dev-only credentials - do not use these values outside local development.
+# Copy .env.example to .env and replace every required placeholder first.
+# This file intentionally contains no reusable credentials or platform-admin token.
 #
 #   docker compose up --build
 #   open http://localhost:3000
 #
-# The console is served by the Next.js container, which proxies API calls to the
-# Go API server-side (injecting the admin token), so the browser never needs a
-# token and no login dialog appears.
+# The console proxies requests to the Go API and forwards the browser's opaque
+# session cookie. Create the first local account at http://localhost:3000/login.
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: capcom
-      POSTGRES_PASSWORD: capcom
-      POSTGRES_DB: capcom
+      POSTGRES_USER: ${CAPCOM_POSTGRES_USER:-capcom}
+      POSTGRES_PASSWORD: ${CAPCOM_POSTGRES_PASSWORD:?Set CAPCOM_POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${CAPCOM_POSTGRES_DB:-capcom}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U capcom -d capcom"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -27,8 +27,8 @@ services:
     build: .
     entrypoint: ["/app/capcom", "migrate", "up"]
     environment:
-      CAPCOM_DATABASE_URL: postgres://capcom:capcom@postgres:5432/capcom?sslmode=disable
-      CAPCOM_SECRET_KEY: "+Of0d9MTExoWZFq2FAjpvps3XSrgD0uaVv13rU8WzlU="
+      CAPCOM_DATABASE_URL: postgres://${CAPCOM_POSTGRES_USER:-capcom}:${CAPCOM_POSTGRES_PASSWORD:?Set CAPCOM_POSTGRES_PASSWORD in .env}@postgres:5432/${CAPCOM_POSTGRES_DB:-capcom}?sslmode=disable
+      CAPCOM_SECRET_KEY: ${CAPCOM_SECRET_KEY:?Set CAPCOM_SECRET_KEY in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,9 +42,10 @@ services:
       - "langgraph.internal:host-gateway"
     environment:
       CAPCOM_HTTP_ADDR: ":8080"
-      CAPCOM_DATABASE_URL: postgres://capcom:capcom@postgres:5432/capcom?sslmode=disable
-      CAPCOM_ADMIN_TOKEN: "capcom-local-dev-token"
-      CAPCOM_SECRET_KEY: "+Of0d9MTExoWZFq2FAjpvps3XSrgD0uaVv13rU8WzlU="
+      CAPCOM_DEPLOYMENT_MODE: "local"
+      CAPCOM_DATABASE_URL: postgres://${CAPCOM_POSTGRES_USER:-capcom}:${CAPCOM_POSTGRES_PASSWORD:?Set CAPCOM_POSTGRES_PASSWORD in .env}@postgres:5432/${CAPCOM_POSTGRES_DB:-capcom}?sslmode=disable
+      CAPCOM_SECURE_COOKIES: ${CAPCOM_SECURE_COOKIES:-false}
+      CAPCOM_SECRET_KEY: ${CAPCOM_SECRET_KEY:?Set CAPCOM_SECRET_KEY in .env}
       CAPCOM_CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     depends_on:
       postgres:
@@ -57,9 +58,8 @@ services:
   web:
     build: ./web
     environment:
-      # Server-side only: the Next proxy reads these; never exposed to the browser.
+      # Server-side only: the Next proxy forwards requests to this service URL.
       CAPCOM_API_URL: "http://api:8080"
-      CAPCOM_ADMIN_TOKEN: "capcom-local-dev-token"
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"

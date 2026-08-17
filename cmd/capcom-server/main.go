@@ -49,13 +49,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		Version:        cfg.Service.Version,
 		AdminToken:     cfg.Security.AdminToken,
 		AllowedOrigins: cfg.Security.AllowedOrigins,
+		SecureCookies:  cfg.Security.SecureCookies,
 	}
 	var syncWorker *workers.RuntimeSyncWorker
 	var telemetryWorker *workers.TelemetryWorker
 	if cfg.Database.URL != "" {
-		if cfg.Security.AdminToken == "" {
-			return fmt.Errorf("CAPCOM_ADMIN_TOKEN is required when CAPCOM_DATABASE_URL is configured")
-		}
 		if len(cfg.Secrets.Key) != 32 {
 			return fmt.Errorf("CAPCOM_SECRET_KEY is required when CAPCOM_DATABASE_URL is configured")
 		}
@@ -76,6 +74,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 		auditRepository := store.NewAuditRepository(db)
+		routerConfig.Auth = services.NewAuthService(store.NewAuthRepository(db))
 		secretService := services.NewSecretService(store.NewSecretRepository(db), auditRepository, cipher)
 		runtimeRepository := store.NewRuntimeConnectionRepository(db)
 		gantryAdapter := gantry.NewClient(nil, secretService)

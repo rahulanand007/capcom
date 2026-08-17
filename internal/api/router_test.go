@@ -45,7 +45,7 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-func TestConsoleIsServedWithoutAdminToken(t *testing.T) {
+func TestRootDoesNotServeLegacyConsole(t *testing.T) {
 	router := NewRouter(RouterConfig{Version: "test", AdminToken: "test-admin-token"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -54,8 +54,26 @@ func TestConsoleIsServedWithoutAdminToken(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte("Capcom Console")) {
-		t.Fatalf("response did not contain console document")
+	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("content type = %q, want application/json", contentType)
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("Capcom Console")) {
+		t.Fatalf("legacy console was exposed: %s", rec.Body.String())
+	}
+}
+
+func TestLegacyConsoleAssetsAreNotServed(t *testing.T) {
+	router := NewRouter(RouterConfig{Version: "test", AdminToken: "test-admin-token"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := authenticatedRequest(http.MethodGet, "/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("sessionStorage")) {
+		t.Fatalf("legacy token client was exposed")
 	}
 }
 

@@ -32,7 +32,6 @@ Implementation has started with the first backend slices:
 - Audited secret creation and rotation APIs.
 - Runtime connections persist secret references rather than credentials.
 - Gantry adapter Bearer authentication resolved at request time.
-- Embedded Capcom verification console served by the Go binary.
 - Live runtime-neutral agent and access inspection through the selected adapter.
 - Main/registered/subagent classification and live current-skill inspection.
 - Durable Gantry agent-to-agent delegation edges with configured, resolved, and conversation-bound provenance.
@@ -51,8 +50,10 @@ Implementation has started with the first backend slices:
 - Audited LangGraph run cancellation using interrupt semantics with post-action verification sync.
 - Next.js + shadcn/ui operator console in `web/` (dark-first with a light theme), a
   separate frontend that calls the Go API.
-- Server-side API proxy in the console injects the admin token, so the browser needs no
-  token and there is no login dialog.
+- Email/password signup and login with Argon2id credentials, revocable
+  server-side sessions, CSRF protection, and automatic organization ownership.
+- Server-side API proxy forwards secure browser session cookies and never injects
+  the local automation token.
 - In-console add-instance flow: adapter picker plus a credential form that stores the
   runtime secret and creates the runtime instance.
 - In-console adapter settings for per-instance identity, endpoint, control mode,
@@ -75,7 +76,7 @@ cmd/
 internal/
   adapters/runtime/     # Runtime-neutral adapter interface
   adapters/langgraph/   # LangGraph Agent Server adapter and contract fixtures
-  api/                  # HTTP router, handlers, and legacy embedded console
+  api/                  # HTTP router, handlers, auth, and error boundary
   config/               # Environment config
   domain/               # Runtime-neutral Capcom domain types
   store/                # Postgres connection, migrations, repositories
@@ -93,8 +94,8 @@ docs/
   Architecture/         # Architecture diagram assets
 ```
 
-> The console UI now lives in `web/` as a separate Next.js app. The static console
-> embedded in `internal/api/ui/` is legacy and kept only so the Go binary still builds.
+> The console UI lives in `web/` as a separate Next.js app. The Go API does not
+> publish browser assets or accept browser-managed administrator tokens.
 
 ## Run Locally
 
@@ -103,13 +104,22 @@ docs/
 Brings up the whole stack: Postgres, migrations, the Go API, and the Next.js console:
 
 ```bash
+cp .env.example .env
+# Replace CAPCOM_POSTGRES_PASSWORD and CAPCOM_SECRET_KEY.
 docker compose up --build
 ```
 
-Then open the console at `http://localhost:3000`. There is no login dialog: the console's
-Next.js server proxies API calls and injects the admin token server-side (see
-`docker-compose.yml`, which uses clearly-labeled dev-only credentials). Add a runtime with
-**+ Add instance**, pick an adapter, then paste the runtime token. Stop with
+Generate a database password with a password generator and a 32-byte encryption
+key with `openssl rand -base64 32`. Keep the Compose database password URL-safe.
+For host-run Go commands, also put the same password (percent-encoded when needed)
+in `CAPCOM_DATABASE_URL`. Compose fails closed when its required values
+are missing; it never supplies a default password, encryption key, or platform
+administrator token.
+
+Then open `http://localhost:3000/login` and create the first local account. It
+claims ownership of existing local runtime records; later signups receive isolated
+personal organizations. Add a runtime with **+ Add instance**, pick an adapter,
+then paste the runtime token. Stop with
 `docker compose down` (add `-v` to also drop the Postgres volume).
 
 ### Backend only (Go)
@@ -143,10 +153,11 @@ npm install        # first time only
 npm run dev        # http://localhost:3000
 ```
 
-Point it at the API with `NEXT_PUBLIC`-free server env: set `CAPCOM_API_URL` (default
-`http://127.0.0.1:8081`) and `CAPCOM_ADMIN_TOKEN` for the console's server-side proxy. See
-[web/README.md](web/README.md). The legacy embedded console remains at
-`http://127.0.0.1:8080/` (enter `CAPCOM_ADMIN_TOKEN` in its dialog) until it is retired.
+Point it at the API with the server-only `CAPCOM_API_URL` setting (default
+`http://127.0.0.1:8081`). Create an email/password account at `/login`; the Go API
+issues an opaque, revocable session and the Next.js proxy forwards its cookies
+without injecting an administrator credential. `CAPCOM_ADMIN_TOKEN` remains an
+optional local automation/CLI compatibility path. See [web/README.md](web/README.md).
 
 The Agents view separates durable Gantry agents from ephemeral subagent
 executions. Gantry must have emitted a `delegated_agent` task lifecycle event
@@ -165,14 +176,37 @@ endpoints such as `http://gantry.internal:8787`, `:8788`, and `:8789` when
 Capcom runs in Docker; loopback endpoints only work when the API runs on the
 host.
 
-Local LangGraph Agent Server instances use the same host-gateway pattern. Start
-the deterministic fixture in `examples/langgraph-agent-server` on port `2024`,
-then register `http://langgraph.internal:2024` as a `langgraph` runtime. Use
-`read_only` for inventory only or `control_enabled` to allow assistant deletion
-and active-run cancellation. Local `langgraph dev` has no-op authentication, so
-use a non-empty local-only secret placeholder; hosted deployments require a
-real LangSmith API key. See the
-[LangGraph adapter contract](docs/v1/17-langgraph-agent-server-adapter.md).
+### Connect a LangGraph Agent Server
+
+1. From the LangGraph application directory, install the development CLI and
+   bind Agent Server beyond loopback so the Dockerized Capcom API can reach it:
+
+   ```powershell
+   python -m pip install -U "langgraph-cli[inmem]"
+   langgraph dev --host 0.0.0.0 --port 2024 --no-browser
+   ```
+
+2. Verify `http://127.0.0.1:2024/ok` on the host. If Capcom runs in Docker, use
+   `http://langgraph.internal:2024` in Capcom; if Capcom runs directly on the
+   host, use `http://127.0.0.1:2024`.
+3. Sign in to Capcom, choose **Connect an adapter**, select **LangGraph**, and
+   enter a stable instance name, the endpoint above, and `read_only` mode.
+4. Local `langgraph dev` does not validate authentication, but Capcom's adapter
+   contract requires a secret reference. Create a local-only placeholder secret
+   such as `langgraph-local-key` with a non-empty placeholder value. For a
+   LangSmith-hosted deployment, store a real LangSmith API key instead; Capcom
+   sends it as `X-Api-Key`.
+5. Save, run **Test connection**, then **Re-import**. Assistants appear as agents;
+   recent threads and runs appear as runtime executions. Switch to
+   `control_enabled` only when assistant deletion and run cancellation are
+   intentionally required.
+
+Agent Server exposes its runtime API documentation at `/docs`. Capcom currently
+reads `/ok`, `/info`, assistant search, thread search, and thread runs. See the
+[LangGraph adapter contract](docs/v1/17-langgraph-agent-server-adapter.md) for
+the exact endpoint and capability matrix. The upstream behavior is documented in
+LangChain's [CLI reference](https://docs.langchain.com/langsmith/cli) and
+[Agent Server API reference](https://docs.langchain.com/langsmith/server-api-ref).
 
 Health check:
 
@@ -206,7 +240,9 @@ make run
 | `CAPCOM_HTTP_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
 | `CAPCOM_SERVICE_VERSION` | `dev` | Version reported by health responses |
 | `CAPCOM_LOG_LEVEL` | `info` | One of `debug`, `info`, `warn`, `error` |
-| `CAPCOM_ADMIN_TOKEN` | empty | Bearer token required by every API except `GET /healthz` |
+| `CAPCOM_DEPLOYMENT_MODE` | `local` | Set `hosted` outside local development; startup then rejects an admin token or insecure cookies |
+| `CAPCOM_ADMIN_TOKEN` | empty | Optional local automation/CLI bearer token; do not expose it to browsers |
+| `CAPCOM_SECURE_COOKIES` | `true` | Keep enabled behind HTTPS; set `false` only for local HTTP development |
 | `CAPCOM_CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins allowed to call the API (the Next.js console). Preflight `OPTIONS` bypasses admin auth |
 | `CAPCOM_SECRET_KEY` | empty | Base64-encoded 32-byte AES key; required when Postgres is configured |
 | `CAPCOM_DATABASE_URL` | empty | Postgres connection string, required for migrations |
@@ -255,20 +291,9 @@ cp .env.example .env
 make migrate-up
 ```
 
-Current local development database:
-
-```text
-Container: pulse-pg
-Host port: 5433
-Database: capcom
-User: capcom
-Password: capcom
-URL: postgres://capcom:capcom@127.0.0.1:5433/capcom?sslmode=disable
-```
-
-For this workspace, `.env.example` already points at the local development database:
-
-`postgres://capcom:capcom@127.0.0.1:5433/capcom?sslmode=disable`
+`.env.example` contains placeholders only. Never commit the populated `.env`.
+For a host-run API, change the database hostname in `CAPCOM_DATABASE_URL` from
+`postgres` to the published Postgres host and port.
 
 The initial schema creates:
 
@@ -292,10 +317,11 @@ Generate a local Capcom encryption key once and add it to `.env` as
 openssl rand -base64 32
 ```
 
-Set a separate high-entropy `CAPCOM_ADMIN_TOKEN` in `.env`. Every `/v1` request must send
-it as `Authorization: Bearer <admin-token>` (only `GET /healthz` is unauthenticated). The
-examples below use `curl`, which is available on Linux, macOS, and Windows 10+; substitute
-your admin token for `<admin-token>`.
+Browser users create an account at `/login` and use the resulting server-side
+session. For local CLI automation, optionally set a separate high-entropy
+`CAPCOM_ADMIN_TOKEN` and send it as `Authorization: Bearer <admin-token>`. The
+examples below use that compatibility path. Leave this variable unset in hosted
+deployments; it bypasses tenant authorization and is not a production login mechanism.
 
 Store the Gantry Control API token. The response contains metadata only:
 
@@ -407,23 +433,29 @@ For Gantry runtime connections, `/test` calls Gantry `GET /v1/health` and return
 
 ## API Contract
 
-The current REST contract is maintained in [api/openapi.yaml](C:/Users/caw-dev/Desktop/capcom/api/openapi.yaml).
+The current REST contract is maintained in [api/openapi.yaml](api/openapi.yaml).
 
 Use this file as the source of truth for Postman imports, generated clients, and future server-side validation. Do not hand-maintain a separate Postman collection as the primary contract.
 
 ## Documentation
 
-The V1 source of truth is [docs/v1/README.md](C:/Users/caw-dev/Desktop/capcom/docs/v1/README.md).
+The V1 source of truth is [docs/v1/README.md](docs/v1/README.md).
 
 Important docs:
 
-- [Execution implementation plan](C:/Users/caw-dev/Desktop/capcom/docs/v1/13-execution-implementation-plan.md)
-- [Development rules](C:/Users/caw-dev/Desktop/capcom/docs/v1/11-development-rules.md)
-- [Go coding rulebook](C:/Users/caw-dev/Desktop/capcom/docs/v1/12-go-coding-rulebook.md)
-- [Architecture overview](C:/Users/caw-dev/Desktop/capcom/docs/v1/01-architecture-overview.md)
-- [Gantry adapter contract](C:/Users/caw-dev/Desktop/capcom/docs/v1/03-gantry-adapter-contract.md)
+- [Execution implementation plan](docs/v1/13-execution-implementation-plan.md)
+- [Development rules](docs/v1/11-development-rules.md)
+- [Go coding rulebook](docs/v1/12-go-coding-rulebook.md)
+- [Architecture overview](docs/v1/01-architecture-overview.md)
+- [Gantry adapter contract](docs/v1/03-gantry-adapter-contract.md)
 - [Adapter roadmap and webhook plan](docs/v1/16-adapter-roadmap-and-webhook-plan.md)
 - [LangGraph Agent Server adapter](docs/v1/17-langgraph-agent-server-adapter.md)
+- [Public release and ownership transfer checklist](docs/public-release-and-transfer-checklist.md)
+- [Hosted product foundation plan](docs/post-v1/01-hosted-product-foundation.md)
+
+Documentation and examples must remain portable. Use repository-relative links and
+generic placeholders such as `<path-to-capcom>` or `<path-to-gantry>` instead of
+developer-specific workstation paths.
 
 ## Implementation Rule
 

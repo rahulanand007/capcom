@@ -3,6 +3,7 @@
 import * as React from "react"
 
 import { AgentDrilldownDrawer } from "@/components/agent-drilldown-drawer"
+import { PageHeader } from "@/components/operator-ui"
 import {
   AgentTableRow,
   locationForAgent,
@@ -28,15 +29,23 @@ import type {
   PersistedAgent,
   SubagentExecution,
 } from "@/lib/api-types"
-import { relativeTime } from "@/lib/adapters"
+import {
+  buildAdaptersModel,
+  deriveWorstStatus,
+  relativeTime,
+} from "@/lib/adapters"
 import {
   buildAgentTopology,
+  collapseAgentTopology,
   filterAgentTopology,
 } from "@/lib/agent-topology"
 import { cn } from "@/lib/utils"
 
 export function AgentsFleet() {
   const [query, setQuery] = React.useState("")
+  const [collapsedAgentIDs, setCollapsedAgentIDs] = React.useState<Set<string>>(
+    () => new Set()
+  )
   const [selectedAgent, setSelectedAgent] = React.useState<PersistedAgent | null>(
     null
   )
@@ -65,23 +74,37 @@ export function AgentsFleet() {
     () => filterAgentTopology(topology, instances, query),
     [topology, instances, query]
   )
+  const visibleTopology = React.useMemo(
+    () =>
+      query.trim()
+        ? filteredTopology
+        : collapseAgentTopology(filteredTopology, collapsedAgentIDs),
+    [collapsedAgentIDs, filteredTopology, query]
+  )
+  const parentAgentIDs = React.useMemo(
+    () =>
+      new Set(
+        topology.flatMap((row) => row.delegatedBy.map((agent) => agent.id))
+      ),
+    [topology]
+  )
   const loading =
     runtimeInstancesQuery.isLoading ||
     agentsQuery.isLoading ||
     delegationsQuery.isLoading
+  const fleetStatus = React.useMemo(() => {
+    const model = buildAdaptersModel(instances, agents)
+    return deriveWorstStatus(model.adapters.map((adapter) => adapter.status))
+  }, [agents, instances])
 
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-[22px] font-bold leading-tight tracking-[-0.02em] text-[var(--tx)]">
-            Agents
-          </h1>
-          <p className="mt-1 max-w-2xl text-[13px] text-[var(--mu)]">
-            Every agent Capcom has imported, across all adapters and instances.
-          </p>
-        </div>
-        <div className="w-full lg:w-[280px]">
+      <PageHeader
+        eyebrow="Fleet topology"
+        title="Agents"
+        description="Durable agents grouped by orchestrator, with delegated branches and unresolved relationships kept visible."
+        actions={
+          <div className="w-full lg:w-[280px]">
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -89,8 +112,9 @@ export function AgentsFleet() {
             className="font-hud text-[12px]"
             aria-label="Search agents"
           />
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {delegationsQuery.isError ? (
         <div
@@ -101,7 +125,10 @@ export function AgentsFleet() {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-[var(--hl)] bg-[var(--el)] shadow-[var(--chi)]">
+      <div
+        data-status={fleetStatus}
+        className="capcom-status-surface overflow-hidden rounded-xl bg-[var(--el)]"
+      >
         <Table className="table-fixed">
           <colgroup>
             <col className="w-[34%]" />
@@ -126,14 +153,24 @@ export function AgentsFleet() {
           <TableBody>
             {loading ? (
               <FleetSkeletonRows />
-            ) : filteredTopology.length ? (
-              filteredTopology.map((row) => (
+            ) : visibleTopology.length ? (
+              visibleTopology.map((row) => (
                 <AgentTableRow
                   key={row.agent.id}
                   agent={row.agent}
                   topology={row}
                   location={locationForAgent(row.agent, instances)}
                   onAgentClick={setSelectedAgent}
+                  hasChildren={parentAgentIDs.has(row.agent.id)}
+                  expanded={!collapsedAgentIDs.has(row.agent.id)}
+                  onToggle={() =>
+                    setCollapsedAgentIDs((current) => {
+                      const next = new Set(current)
+                      if (next.has(row.agent.id)) next.delete(row.agent.id)
+                      else next.add(row.agent.id)
+                      return next
+                    })
+                  }
                 />
               ))
             ) : (
@@ -149,7 +186,7 @@ export function AgentsFleet() {
           </TableBody>
         </Table>
         <div className="border-t border-[var(--sl)] px-[18px] py-3 font-hud text-[12px] text-[var(--fa)]">
-          Showing {filteredTopology.length} of {agents.length} agents - delegated agents follow their orchestrator and search retains ancestor context.
+          Showing {visibleTopology.length} of {agents.length} agents · delegated branches can be collapsed and search retains ancestor context.
         </div>
       </div>
 
@@ -206,7 +243,7 @@ function SubagentExecutionsSection({
   }, [agents])
 
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--hl)] bg-[var(--el)] shadow-[var(--chi)]">
+    <section className="capcom-panel-surface overflow-hidden rounded-xl bg-[var(--el)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--sl)] px-[18px] py-3">
         <div>
           <div className="capcom-eyebrow">Ephemeral runtime activity</div>
