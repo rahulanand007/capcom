@@ -9,6 +9,7 @@ import (
 
 	"capcom/internal/domain"
 	"capcom/internal/services"
+	"capcom/internal/tenant"
 )
 
 type RuntimeLister interface {
@@ -88,7 +89,8 @@ func (w *RuntimeSyncWorker) schedule(ctx context.Context) {
 		go func() {
 			defer w.wg.Done()
 			defer func() { <-w.semaphore }()
-			runCtx, cancel := context.WithTimeout(ctx, w.requestTimeout)
+			principal := domain.Principal{OrganizationID: conn.OrganizationID, Organization: domain.Organization{ID: conn.OrganizationID}, Role: "system"}
+			runCtx, cancel := context.WithTimeout(tenant.WithPrincipal(ctx, principal), w.requestTimeout)
 			defer cancel()
 			_, err := w.syncer.Sync(runCtx, services.SyncRuntimeInput{RuntimeConnectionID: conn.ID, Trigger: domain.SyncTriggerScheduled, Actor: "capcom-sync-worker", Reason: "scheduled runtime synchronization"})
 			if err != nil && !errors.Is(err, services.ErrSyncConflict) {

@@ -42,7 +42,7 @@ func metricsHandler(cfg RouterConfig, scope func(*http.Request) (runtimeID, agen
 		}
 		query, err := usageQueryFromRequest(r)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		query.RuntimeConnectionID, query.AgentID = scope(r)
@@ -52,7 +52,7 @@ func metricsHandler(cfg RouterConfig, scope func(*http.Request) (runtimeID, agen
 			if errors.Is(err, services.ErrInvalidUsageQuery) {
 				status = http.StatusBadRequest
 			}
-			writeJSON(w, status, errorResponse{Error: err.Error()})
+			writeAPIError(w, status, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, metricsResponseFromDomain(summary))
@@ -67,7 +67,7 @@ func handleTelemetryHealth(cfg RouterConfig) http.HandlerFunc {
 		}
 		run, err := cfg.Telemetry.Health(r.Context(), r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if run.ID == "" {
@@ -246,7 +246,7 @@ func handleOTLPTraces(cfg RouterConfig) http.HandlerFunc {
 			observations, rejected, err = normalizeOTLPJSON(body)
 		}
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		accepted, validationRejected, deduplicated, ingestErr := cfg.Telemetry.Ingest(r.Context(), observations)
@@ -259,7 +259,7 @@ func handleOTLPTraces(cfg RouterConfig) http.HandlerFunc {
 				if isRejectedObservation {
 					status = http.StatusBadRequest
 				}
-				writeJSON(w, status, errorResponse{Error: ingestErr.Error()})
+				writeAPIError(w, status, ingestErr)
 				return
 			}
 		}

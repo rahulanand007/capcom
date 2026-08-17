@@ -9,7 +9,7 @@ Run a local Gantry runtime and connect Capcom to it through the Gantry Control A
 - Windows host with PowerShell.
 - Docker Desktop running with the Linux engine available.
 - Node.js compatible with Gantry package requirements: `>=24 <26`.
-- Local Gantry repo available at `C:\Users\caw-dev\Desktop\myclaw`.
+- Local Gantry source checkout available.
 - A writable `GANTRY_HOME` directory with `.env` and `settings.yaml`.
 - Postgres reachable by Gantry.
 
@@ -66,7 +66,7 @@ docker ps
 3. Start Gantry Postgres from the Gantry repo:
 
 ```powershell
-cd C:\Users\caw-dev\Desktop\myclaw
+cd <path-to-gantry>
 docker compose up -d postgres
 ```
 

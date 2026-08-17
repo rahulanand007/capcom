@@ -10,24 +10,50 @@
 
 ## Capcom Auth
 
-V1 uses single admin token:
+Local automation can explicitly enable the platform admin compatibility path:
 
 ```text
 CAPCOM_ADMIN_TOKEN
 ```
 
-All API requests except `GET /healthz` require:
+Automation requests may use:
 
 ```text
 Authorization: Bearer <token>
 ```
 
-Future:
+The path is disabled when `CAPCOM_ADMIN_TOKEN` is empty. It bypasses tenant
+membership checks, so production and hosted environments must leave it unset.
+Setting `CAPCOM_DEPLOYMENT_MODE=hosted` makes startup fail if an admin token is
+present or secure cookies are disabled, enforcing both boundaries in backend
+configuration rather than relying only on deployment documentation.
+Any future emergency production access must be a separately protected,
+short-lived, audited break-glass flow rather than this bearer token.
 
-- users
-- SSO
-- RBAC
-- per-action permissions
+The browser console now uses email/password authentication backed by Argon2id
+credentials and opaque server-side sessions. `POST /auth/signup` atomically
+creates a user, organization owner membership, and session. `POST /auth/login`
+uses generic failures and throttling. Session cookies are HttpOnly and SameSite
+Lax; state-changing requests also require the separate CSRF token. Set
+`CAPCOM_SECURE_COOKIES=true` behind HTTPS. Runtime connections, runtime reads,
+secrets, telemetry, and audit writes are scoped to the authenticated
+organization in the application repositories.
+
+The remaining hosted hardening work—forced PostgreSQL RLS, managed per-tenant
+keys, private connector, SSRF-safe egress, full membership management, and OIDC—is
+tracked in the post-V1 foundation document.
+
+The implementation-ready post-V1 design is maintained in
+[Hosted Product Foundation](../post-v1/01-hosted-product-foundation.md). The initial
+hosted authentication scope is email/password plus secure server-side sessions;
+OTP, outbound email, and OIDC are deferred. The plan also covers organization
+ownership, PostgreSQL row-level security, managed per-tenant encryption, safe
+egress, quotas, privacy lifecycle controls, and the outbound runtime connector.
+The implemented session slice preserves the V1 admin-token path for local CLI
+and worker compatibility while removing that token from the browser proxy.
+The Go API no longer embeds the legacy console or publishes `/assets/*`; browser
+credentials exist only as opaque HttpOnly server-managed sessions in the Next.js
+application flow.
 
 ## Runtime Credentials
 
@@ -118,7 +144,7 @@ Raw runtime payload storage should redact obvious secret fields.
 
 | Threat | Mitigation |
 |---|---|
-| Stolen Capcom admin token | Local MVP risk; rotate token, move to SSO/RBAC later |
+| Stolen Capcom admin token | Disabled by default; local automation only; hosted deployments require a separate audited break-glass design |
 | Over-scoped Gantry key | Support read-only mode and document scopes |
 | Accidental destructive action | No delete-agent action in V1; require reason and confirmation |
 | Silent mutation | Audit before and after every control action |

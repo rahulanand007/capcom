@@ -3,10 +3,8 @@ package api
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -25,6 +23,16 @@ type RouterConfig struct {
 	RuntimeSync        RuntimeSyncService
 	ControlActions     ControlActionService
 	Telemetry          TelemetryService
+	Auth               AuthService
+	SecureCookies      bool
+}
+
+type AuthService interface {
+	Signup(context.Context, string, string) (domain.AuthSession, error)
+	Login(context.Context, string, string, string) (domain.AuthSession, error)
+	Authenticate(context.Context, string) (domain.Principal, error)
+	VerifyCSRF(domain.Principal, string) error
+	Logout(context.Context, string) error
 }
 
 type TelemetryService interface {
@@ -67,9 +75,6 @@ type RuntimeConnectionService interface {
 	GetAgentAccess(ctx context.Context, id string, runtimeAgentID string) (*domain.AccessDocument, error)
 }
 
-//go:embed ui/*
-var uiFiles embed.FS
-
 type SecretService interface {
 	Create(ctx context.Context, input services.StoreSecretInput) (domain.Secret, error)
 	Rotate(ctx context.Context, input services.StoreSecretInput) (domain.Secret, error)
@@ -81,13 +86,12 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	}
 
 	mux := http.NewServeMux()
-	ui, err := fs.Sub(uiFiles, "ui")
-	if err != nil {
-		panic("load embedded console: " + err.Error())
-	}
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(ui))))
-	mux.HandleFunc("GET /{$}", serveConsole(ui))
+	mux.HandleFunc("GET /{$}", handleServiceRoot(cfg))
 	mux.HandleFunc("GET /healthz", handleHealth(cfg))
+	mux.HandleFunc("POST /auth/signup", handleSignup(cfg))
+	mux.HandleFunc("POST /auth/login", handleLogin(cfg))
+	mux.HandleFunc("POST /auth/logout", handleLogout(cfg))
+	mux.HandleFunc("GET /v1/me", handleMe(cfg))
 	mux.HandleFunc("POST /v1/secrets", handleCreateSecret(cfg))
 	mux.HandleFunc("PUT /v1/secrets/{name}", handleRotateSecret(cfg))
 	mux.HandleFunc("POST /v1/runtime-connections", handleCreateRuntimeConnection(cfg))
@@ -141,19 +145,16 @@ func NewRouter(cfg RouterConfig, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/telemetry/otlp/v1/traces", handleOTLPTraces(cfg))
 	mux.HandleFunc("/", handleNotFound)
 
-	handler := corsMiddleware(adminAuth(mux, cfg.AdminToken), cfg.AllowedOrigins)
+	handler := corsMiddleware(sessionAuth(mux, cfg.AdminToken, cfg.Auth), cfg.AllowedOrigins)
 	return requestLogger(recoverMiddleware(handler, logger), logger)
 }
 
-func serveConsole(ui fs.FS) http.HandlerFunc {
+func handleServiceRoot(cfg RouterConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		content, err := fs.ReadFile(ui, "index.html")
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "console_unavailable"})
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(content)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"service": "capcom",
+			"version": cfg.Version,
+		})
 	}
 }
 
@@ -169,10 +170,10 @@ func handleCreateSecret(cfg RouterConfig) http.HandlerFunc {
 			return
 		}
 		secret, err := cfg.Secrets.Create(r.Context(), services.StoreSecretInput{
-			Name: req.Name, Value: req.Value, Actor: req.Actor, Reason: req.Reason,
+			Name: req.Name, Value: req.Value, Actor: requestActor(r, req.Actor), Reason: req.Reason,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, secretResponseFromDomain(secret))
@@ -191,14 +192,14 @@ func handleRotateSecret(cfg RouterConfig) http.HandlerFunc {
 			return
 		}
 		secret, err := cfg.Secrets.Rotate(r.Context(), services.StoreSecretInput{
-			Name: r.PathValue("name"), Value: req.Value, Actor: req.Actor, Reason: req.Reason,
+			Name: r.PathValue("name"), Value: req.Value, Actor: requestActor(r, req.Actor), Reason: req.Reason,
 		})
 		if err != nil {
 			if errors.Is(err, services.ErrSecretNotFound) {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found"})
 				return
 			}
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, secretResponseFromDomain(secret))
@@ -242,13 +243,13 @@ func handleCreateRuntimeConnection(cfg RouterConfig) http.HandlerFunc {
 			Kind:        domain.RuntimeKind(req.RuntimeType),
 			Mode:        domain.RuntimeMode(req.Mode),
 			Endpoint:    req.Endpoint,
-			Actor:       req.Actor,
+			Actor:       requestActor(r, req.Actor),
 			Reason:      req.Reason,
 			Description: req.Description,
 			AuthRef:     req.AuthRef,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 
@@ -313,14 +314,14 @@ func handleUpdateRuntimeInstanceSettings(cfg RouterConfig) http.HandlerFunc {
 			ID: r.PathValue("id"), DisplayName: req.DisplayName, Environment: req.Environment,
 			Labels: req.Labels, Mode: domain.RuntimeMode(req.Mode), Endpoint: req.Endpoint,
 			AuthRef: req.AuthRef, Description: req.Description, SyncEnabled: req.SyncEnabled,
-			SyncIntervalSeconds: req.SyncIntervalSeconds, Actor: req.Actor, Reason: req.Reason,
+			SyncIntervalSeconds: req.SyncIntervalSeconds, Actor: requestActor(r, req.Actor), Reason: req.Reason,
 		})
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, sql.ErrNoRows) {
 				status = http.StatusNotFound
 			}
-			writeJSON(w, status, errorResponse{Error: err.Error()})
+			writeAPIError(w, status, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, runtimeConnectionResponseFromDomain(conn))
@@ -340,14 +341,14 @@ func handleRemoveRuntimeInstance(cfg RouterConfig) http.HandlerFunc {
 		}
 		err := cfg.RuntimeConnections.Remove(r.Context(), services.RemoveRuntimeInstanceInput{
 			ID: r.PathValue("id"), Confirmation: req.Confirmation,
-			Actor: req.Actor, Reason: req.Reason,
+			Actor: requestActor(r, req.Actor), Reason: req.Reason,
 		})
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, sql.ErrNoRows) {
 				status = http.StatusNotFound
 			}
-			writeJSON(w, status, errorResponse{Error: err.Error()})
+			writeAPIError(w, status, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -370,7 +371,7 @@ func handleConsolidateRuntimeEndpoint(cfg RouterConfig) http.HandlerFunc {
 			DuplicateID:  req.DuplicateRuntimeInstanceID,
 			Kind:         domain.RuntimeEndpointKind(req.Kind),
 			Confirmation: req.Confirmation,
-			Actor:        req.Actor,
+			Actor:        requestActor(r, req.Actor),
 			Reason:       req.Reason,
 		})
 		if err != nil {
@@ -378,7 +379,7 @@ func handleConsolidateRuntimeEndpoint(cfg RouterConfig) http.HandlerFunc {
 			if errors.Is(err, sql.ErrNoRows) {
 				status = http.StatusNotFound
 			}
-			writeJSON(w, status, errorResponse{Error: err.Error()})
+			writeAPIError(w, status, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, runtimeConnectionResponseFromDomain(conn))
@@ -398,7 +399,7 @@ func handleTestRuntimeConnection(cfg RouterConfig) http.HandlerFunc {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found"})
 				return
 			}
-			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadGateway, err)
 			return
 		}
 
@@ -423,7 +424,7 @@ func handleListRuntimeAgents(cfg RouterConfig) http.HandlerFunc {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found"})
 				return
 			}
-			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadGateway, err)
 			return
 		}
 		response := make([]runtimeAgentResponse, 0, len(agents))
@@ -446,7 +447,7 @@ func handleGetRuntimeAgentAccess(cfg RouterConfig) http.HandlerFunc {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found"})
 				return
 			}
-			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadGateway, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, runtimeAgentAccessResponseFromDomain(*access))
@@ -465,7 +466,7 @@ func handleListRuntimeAgentSkills(cfg RouterConfig) http.HandlerFunc {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found"})
 				return
 			}
-			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadGateway, err)
 			return
 		}
 		response := make([]runtimeAgentSkillResponse, 0, len(skills))
@@ -478,10 +479,8 @@ func handleListRuntimeAgentSkills(cfg RouterConfig) http.HandlerFunc {
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	if failure, ok := value.(errorResponse); ok {
-		if status >= http.StatusInternalServerError {
-			slog.Default().Warn("api request failed", "status", status, "technical_error", failure.Error)
-		}
-		value = publicError(status, failure.Error)
+		writeAPIError(w, status, errors.New(failure.Error))
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -664,6 +663,10 @@ func runtimeConnectionResponseFromDomain(conn domain.RuntimeConnection) runtimeC
 			UpdatedAt:                 endpoint.UpdatedAt.UTC().Format(time.RFC3339),
 		})
 	}
+	lastError := ""
+	if conn.LastError != "" {
+		lastError = publicError(http.StatusServiceUnavailable, conn.LastError).Error.Message
+	}
 	return runtimeConnectionResponse{
 		ID:                  conn.ID,
 		Name:                conn.Name,
@@ -685,7 +688,7 @@ func runtimeConnectionResponseFromDomain(conn domain.RuntimeConnection) runtimeC
 		LastSyncStartedAt:   lastSyncStartedAt,
 		LastSyncFinishedAt:  lastSyncFinishedAt,
 		LastSyncDurationMS:  conn.LastSyncDurationMS,
-		LastError:           conn.LastError,
+		LastError:           lastError,
 		Endpoints:           endpoints,
 	}
 }

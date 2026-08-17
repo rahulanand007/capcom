@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
 type RuntimeConnectionRepository struct {
@@ -56,8 +57,8 @@ func (r SecretRepository) Create(ctx context.Context, secret domain.Secret, ciph
 	secret.CreatedAt = now
 	secret.UpdatedAt = now
 	if _, err := r.db.ExecContext(ctx, `
-INSERT INTO secrets (id, name, ciphertext, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5)`, secret.ID, secret.Name, ciphertext, secret.CreatedAt, secret.UpdatedAt); err != nil {
+INSERT INTO secrets (id, name, ciphertext, organization_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)`, secret.ID, secret.Name, ciphertext, organizationIDForWrite(ctx), secret.CreatedAt, secret.UpdatedAt); err != nil {
 		return domain.Secret{}, fmt.Errorf("create secret: %w", err)
 	}
 	return secret, nil
@@ -68,8 +69,8 @@ func (r SecretRepository) Rotate(ctx context.Context, name string, ciphertext []
 	if err := r.db.QueryRowContext(ctx, `
 UPDATE secrets
 SET ciphertext = $2, updated_at = now()
-WHERE name = $1
-RETURNING id, name, created_at, updated_at`, name, ciphertext).Scan(
+WHERE name = $1 AND organization_id=$3
+RETURNING id, name, created_at, updated_at`, name, ciphertext, organizationIDForWrite(ctx)).Scan(
 		&secret.ID, &secret.Name, &secret.CreatedAt, &secret.UpdatedAt,
 	); err != nil {
 		return domain.Secret{}, fmt.Errorf("rotate secret: %w", err)
@@ -79,7 +80,7 @@ RETURNING id, name, created_at, updated_at`, name, ciphertext).Scan(
 
 func (r SecretRepository) GetCiphertext(ctx context.Context, name string) ([]byte, error) {
 	var ciphertext []byte
-	if err := r.db.QueryRowContext(ctx, `SELECT ciphertext FROM secrets WHERE name = $1`, name).Scan(&ciphertext); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT ciphertext FROM secrets WHERE name = $1 AND organization_id=$2`, name, organizationIDForWrite(ctx)).Scan(&ciphertext); err != nil {
 		return nil, fmt.Errorf("get secret ciphertext: %w", err)
 	}
 	return ciphertext, nil
@@ -110,10 +111,11 @@ func (r AuditRepository) Create(ctx context.Context, event domain.AuditEvent) (d
 
 	if _, err := r.db.ExecContext(ctx, `
 INSERT INTO audit_events (
-	id, runtime_connection_id, agent_id, control_action_id, actor, event_type,
+	id, organization_id, runtime_connection_id, agent_id, control_action_id, actor, event_type,
 	target_type, target_id, reason, before_json, after_json, result, metadata_json, created_at
-) VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, COALESCE($13::jsonb, '{}'::jsonb), $14)`,
+) VALUES ($1, $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, COALESCE($14::jsonb, '{}'::jsonb), $15)`,
 		event.ID,
+		organizationIDForWrite(ctx),
 		event.RuntimeConnectionID,
 		event.AgentID,
 		event.ControlActionID,
@@ -157,6 +159,7 @@ func (r RuntimeConnectionRepository) Create(ctx context.Context, conn domain.Run
 	if conn.Metadata == nil {
 		conn.Metadata = map[string]any{}
 	}
+	conn.OrganizationID = organizationIDForWrite(ctx)
 	metadata, err := json.Marshal(conn.Metadata)
 	if err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("marshal runtime metadata: %w", err)
@@ -174,10 +177,10 @@ func (r RuntimeConnectionRepository) Create(ctx context.Context, conn domain.Run
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runtime_connections (
 	id, name, display_name, environment, runtime_type, mode, status, endpoint, auth_ref,
-	metadata_json, labels_json, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10::jsonb, $11::jsonb, $12, $13)`,
+	metadata_json, labels_json, organization_id, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10::jsonb, $11::jsonb, $12, $13, $14)`,
 		conn.ID, conn.Name, conn.DisplayName, conn.Environment, conn.Kind, conn.Mode, conn.Status,
-		conn.BaseURL, conn.AuthRef, string(metadata), string(labels), conn.CreatedAt, conn.UpdatedAt); err != nil {
+		conn.BaseURL, conn.AuthRef, string(metadata), string(labels), conn.OrganizationID, conn.CreatedAt, conn.UpdatedAt); err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("create runtime connection: %w", err)
 	}
 	endpointID, err := newID()
@@ -220,8 +223,8 @@ func (r RuntimeConnectionRepository) UpdateSettings(ctx context.Context, conn do
 display_name=$2, environment=$3, labels_json=$4::jsonb, mode=$5, endpoint=$6,
 auth_ref=NULLIF($7, ''), metadata_json=$8::jsonb, sync_enabled=$9,
 sync_interval_seconds=$10, updated_at=now()
-WHERE id=$1 AND archived_at IS NULL`, conn.ID, conn.DisplayName, conn.Environment, string(labels), conn.Mode,
-		conn.BaseURL, conn.AuthRef, string(metadata), conn.SyncEnabled, conn.SyncIntervalSeconds); err != nil {
+WHERE id=$1 AND archived_at IS NULL AND ($11='' OR organization_id=$11::uuid)`, conn.ID, conn.DisplayName, conn.Environment, string(labels), conn.Mode,
+		conn.BaseURL, conn.AuthRef, string(metadata), conn.SyncEnabled, conn.SyncIntervalSeconds, tenant.OrganizationID(ctx)); err != nil {
 		return domain.RuntimeConnection{}, fmt.Errorf("update runtime instance settings: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -243,13 +246,14 @@ func (r RuntimeConnectionRepository) Get(ctx context.Context, id string) (domain
 	var lastSyncStatus, lastError sql.NullString
 	var metadata, labels []byte
 	if err := r.db.QueryRowContext(ctx, `
-SELECT id, name, display_name, environment, runtime_type, mode, status, endpoint, COALESCE(auth_ref, ''),
+SELECT id, organization_id, name, display_name, environment, runtime_type, mode, status, endpoint, COALESCE(auth_ref, ''),
 metadata_json, labels_json, created_at, updated_at, last_sync_at,
 sync_enabled, sync_interval_seconds, last_sync_status, last_sync_started_at, last_sync_finished_at,
 COALESCE(last_sync_duration_ms,0), last_error
 FROM runtime_connections
-WHERE id = $1 AND archived_at IS NULL`, id).Scan(
+WHERE id = $1 AND archived_at IS NULL AND ($2='' OR organization_id=$2::uuid)`, id, tenant.OrganizationID(ctx)).Scan(
 		&conn.ID,
+		&conn.OrganizationID,
 		&conn.Name,
 		&conn.DisplayName,
 		&conn.Environment,
@@ -304,13 +308,13 @@ WHERE id = $1 AND archived_at IS NULL`, id).Scan(
 
 func (r RuntimeConnectionRepository) List(ctx context.Context) ([]domain.RuntimeConnection, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, display_name, environment, runtime_type, mode, status, endpoint, COALESCE(auth_ref, ''),
+SELECT id, organization_id, name, display_name, environment, runtime_type, mode, status, endpoint, COALESCE(auth_ref, ''),
 metadata_json, labels_json, created_at, updated_at, last_sync_at,
 sync_enabled, sync_interval_seconds, last_sync_status, last_sync_started_at, last_sync_finished_at,
 COALESCE(last_sync_duration_ms,0), last_error
 FROM runtime_connections
-WHERE archived_at IS NULL
-ORDER BY name`)
+WHERE archived_at IS NULL AND ($1='' OR organization_id=$1::uuid)
+ORDER BY name`, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list runtime connections: %w", err)
 	}
@@ -324,6 +328,7 @@ ORDER BY name`)
 		var metadata, labels []byte
 		if err := rows.Scan(
 			&conn.ID,
+			&conn.OrganizationID,
 			&conn.Name,
 			&conn.DisplayName,
 			&conn.Environment,
@@ -388,7 +393,7 @@ func (r RuntimeConnectionRepository) Archive(ctx context.Context, id, actor, rea
 UPDATE runtime_connections
 SET archived_at = now(), archived_by = $2, archive_reason = $3,
     archive_kind = 'removed', sync_enabled = false, status = 'disabled', updated_at = now()
-WHERE id = $1 AND archived_at IS NULL`, id, actor, reason)
+WHERE id = $1 AND archived_at IS NULL AND ($4='' OR organization_id=$4::uuid)`, id, actor, reason, tenant.OrganizationID(ctx))
 	if err != nil {
 		return fmt.Errorf("archive runtime connection: %w", err)
 	}
@@ -449,12 +454,12 @@ func (r RuntimeConnectionRepository) ConsolidateEndpoint(
 	var endpoint, authRef string
 	if err := tx.QueryRowContext(ctx, `
 SELECT runtime_type FROM runtime_connections
-WHERE id=$1 AND archived_at IS NULL FOR UPDATE`, canonicalID).Scan(&canonicalKind); err != nil {
+WHERE id=$1 AND archived_at IS NULL AND ($2='' OR organization_id=$2::uuid) FOR UPDATE`, canonicalID, tenant.OrganizationID(ctx)).Scan(&canonicalKind); err != nil {
 		return fmt.Errorf("get canonical runtime connection: %w", err)
 	}
 	if err := tx.QueryRowContext(ctx, `
 SELECT runtime_type, endpoint, COALESCE(auth_ref, '') FROM runtime_connections
-WHERE id=$1 AND archived_at IS NULL FOR UPDATE`, duplicateID).Scan(&duplicateKind, &endpoint, &authRef); err != nil {
+WHERE id=$1 AND archived_at IS NULL AND ($2='' OR organization_id=$2::uuid) FOR UPDATE`, duplicateID, tenant.OrganizationID(ctx)).Scan(&duplicateKind, &endpoint, &authRef); err != nil {
 		return fmt.Errorf("get duplicate runtime connection: %w", err)
 	}
 	if canonicalKind != duplicateKind {
@@ -523,9 +528,9 @@ func (r AgentRepository) Create(ctx context.Context, agent domain.Agent, binding
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO agents (id, name, status, metadata_json, created_at, updated_at)
-VALUES ($1, $2, $3, '{}'::jsonb, $4, $5)`,
-		agent.ID, agent.Name, agent.Status, agent.CreatedAt, agent.UpdatedAt); err != nil {
+INSERT INTO agents (id, organization_id, name, status, metadata_json, created_at, updated_at)
+SELECT $1, organization_id, $2, $3, '{}'::jsonb, $4, $5 FROM runtime_connections WHERE id=$6 AND ($7='' OR organization_id=$7::uuid)`,
+		agent.ID, agent.Name, agent.Status, agent.CreatedAt, agent.UpdatedAt, binding.RuntimeConnectionID, tenant.OrganizationID(ctx)); err != nil {
 		return domain.Agent{}, domain.AgentBinding{}, fmt.Errorf("create agent: %w", err)
 	}
 
@@ -549,7 +554,7 @@ func (r AgentRepository) Get(ctx context.Context, id string) (domain.Agent, erro
 	if err := r.db.QueryRowContext(ctx, `
 SELECT id, name, status, created_at, updated_at
 FROM agents
-WHERE id = $1`, id).Scan(&agent.ID, &agent.Name, &agent.Status, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
+WHERE id = $1 AND ($2='' OR organization_id=$2::uuid)`, id, tenant.OrganizationID(ctx)).Scan(&agent.ID, &agent.Name, &agent.Status, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
 		return domain.Agent{}, fmt.Errorf("get agent: %w", err)
 	}
 	return agent, nil
@@ -559,7 +564,8 @@ func (r AgentRepository) List(ctx context.Context) ([]domain.Agent, error) {
 	rows, err := r.db.QueryContext(ctx, `
 SELECT id, name, status, created_at, updated_at
 FROM agents
-ORDER BY name`)
+WHERE ($1='' OR organization_id=$1::uuid)
+ORDER BY name`, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -600,4 +606,11 @@ func marshalNullableJSON(value map[string]any) (any, error) {
 		return nil, err
 	}
 	return string(data), nil
+}
+
+func organizationIDForWrite(ctx context.Context) string {
+	if organizationID := tenant.OrganizationID(ctx); organizationID != "" {
+		return organizationID
+	}
+	return bootstrapOrganizationID
 }

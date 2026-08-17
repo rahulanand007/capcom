@@ -27,7 +27,7 @@ func handleSyncRuntime(cfg RouterConfig) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
 			return
 		}
-		run, err := cfg.RuntimeSync.Sync(r.Context(), services.SyncRuntimeInput{RuntimeConnectionID: r.PathValue("id"), Trigger: domain.SyncTriggerManual, Actor: req.Actor, Reason: req.Reason})
+		run, err := cfg.RuntimeSync.Sync(r.Context(), services.SyncRuntimeInput{RuntimeConnectionID: r.PathValue("id"), Trigger: domain.SyncTriggerManual, Actor: requestActor(r, req.Actor), Reason: req.Reason})
 		if err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, services.ErrSyncConflict) {
@@ -39,7 +39,7 @@ func handleSyncRuntime(cfg RouterConfig) http.HandlerFunc {
 			if run.ID == "" && status == http.StatusBadGateway {
 				status = http.StatusBadRequest
 			}
-			writeJSON(w, status, map[string]any{"error": err.Error(), "sync_run": syncRunResponse(run)})
+			writeAPIErrorWith(w, status, err, map[string]any{"sync_run": syncRunResponse(run)})
 			return
 		}
 		writeJSON(w, http.StatusOK, syncRunResponse(run))
@@ -55,7 +55,7 @@ func handleListSyncRuns(cfg RouterConfig) http.HandlerFunc {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		runs, err := cfg.RuntimeSync.ListRuns(r.Context(), r.PathValue("id"), limit)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(runs))
@@ -78,7 +78,7 @@ func handleGetSyncRun(cfg RouterConfig) http.HandlerFunc {
 			if errors.Is(err, sql.ErrNoRows) {
 				status = http.StatusNotFound
 			}
-			writeJSON(w, status, errorResponse{Error: err.Error()})
+			writeAPIError(w, status, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, syncRunResponse(run))
@@ -93,7 +93,7 @@ func handleListPersistedAgents(cfg RouterConfig) http.HandlerFunc {
 		}
 		agents, err := cfg.RuntimeSync.ListAgents(r.Context(), r.URL.Query().Get("runtime_connection_id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(agents))
@@ -112,7 +112,7 @@ func handleListInstanceAgents(cfg RouterConfig) http.HandlerFunc {
 		}
 		agents, err := cfg.RuntimeSync.ListAgents(r.Context(), r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 		out := make([]map[string]any, 0, len(agents))
@@ -167,7 +167,7 @@ func handleListSubagentExecutions(cfg RouterConfig) http.HandlerFunc {
 func writeSubagentExecutions(w http.ResponseWriter, r *http.Request, cfg RouterConfig, runtimeID, agentID string) {
 	items, err := cfg.RuntimeSync.ListSubagentExecutions(r.Context(), runtimeID, agentID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(items))
@@ -217,7 +217,7 @@ func writeRuntimeExecutions(w http.ResponseWriter, r *http.Request, cfg RouterCo
 	items, err := cfg.RuntimeSync.ListRuntimeExecutions(r.Context(), runtimeID,
 		r.URL.Query().Get("runtime_agent_id"), r.URL.Query().Get("kind"), limit)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(items))
@@ -245,20 +245,24 @@ func loadPersistedAgent(w http.ResponseWriter, r *http.Request, cfg RouterConfig
 		if errors.Is(err, sql.ErrNoRows) {
 			status = http.StatusNotFound
 		}
-		writeJSON(w, status, errorResponse{Error: err.Error()})
+		writeAPIError(w, status, err)
 		return domain.PersistedAgentDetail{}, false
 	}
 	return detail, true
 }
 
 func syncRunResponse(run domain.RuntimeSyncRun) map[string]any {
+	errorMessage := ""
+	if run.ErrorMessage != "" {
+		errorMessage = publicError(http.StatusBadGateway, run.ErrorMessage).Error.Message
+	}
 	return map[string]any{"id": run.ID, "runtime_connection_id": run.RuntimeConnectionID, "trigger": run.Trigger, "status": run.Status,
 		"started_at": run.StartedAt, "finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "agents_seen": run.AgentsSeen,
 		"skills_seen": run.SkillsSeen, "bindings_seen": run.BindingsSeen, "access_documents_seen": run.AccessDocumentsSeen,
 		"executions_seen":  run.ExecutionsSeen,
 		"diagnostics_seen": run.DiagnosticsSeen, "inventory_seen": run.InventorySeen, "capabilities_seen": run.CapabilitiesSeen,
 		"delegations_seen": run.DelegationsSeen,
-		"error_code":       run.ErrorCode, "error_message": run.ErrorMessage}
+		"error_code":       run.ErrorCode, "error_message": errorMessage}
 }
 
 func persistedAgentResponse(agent domain.PersistedAgent) map[string]any {

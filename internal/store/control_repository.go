@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
 type ControlActionRepository struct{ db *sql.DB }
@@ -32,9 +33,9 @@ func (r ControlActionRepository) Create(ctx context.Context, action domain.Contr
 		return action, fmt.Errorf("marshal control action parameters: %w", err)
 	}
 	_, err = r.db.ExecContext(ctx, `INSERT INTO control_actions
-(id,runtime_connection_id,agent_id,action_type,requested_by,reason,idempotency_key,parameters_json,status,created_at,updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8::jsonb,$9,$10,$10)`, action.ID, action.RuntimeConnectionID,
-		action.AgentID, action.Type, action.Actor, action.Reason, action.IdempotencyKey, string(parameters), action.Status, now)
+(id,organization_id,runtime_connection_id,agent_id,action_type,requested_by,reason,idempotency_key,parameters_json,status,created_at,updated_at)
+SELECT $1,organization_id,$2,$3,$4,$5,$6,NULLIF($7,''),$8::jsonb,$9,$10,$10 FROM runtime_connections WHERE id=$2 AND ($11='' OR organization_id=$11::uuid)`, action.ID, action.RuntimeConnectionID,
+		action.AgentID, action.Type, action.Actor, action.Reason, action.IdempotencyKey, string(parameters), action.Status, now, tenant.OrganizationID(ctx))
 	if err != nil {
 		return action, fmt.Errorf("create control action: %w", err)
 	}
@@ -47,7 +48,7 @@ func (r ControlActionRepository) FindByIdempotencyKey(ctx context.Context, key s
 	var errorText sql.NullString
 	err := r.db.QueryRowContext(ctx, `SELECT id,runtime_connection_id,COALESCE(agent_id::text,''),action_type,
 requested_by,reason,COALESCE(idempotency_key,''),parameters_json,COALESCE(runtime_response_json,'{}'::jsonb),
-status,error,created_at,updated_at FROM control_actions WHERE idempotency_key=$1`, key).Scan(&action.ID, &action.RuntimeConnectionID,
+status,error,created_at,updated_at FROM control_actions WHERE idempotency_key=$1 AND ($2='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=control_actions.runtime_connection_id AND rc.organization_id=$2::uuid))`, key, tenant.OrganizationID(ctx)).Scan(&action.ID, &action.RuntimeConnectionID,
 		&action.AgentID, &action.Type, &action.Actor, &action.Reason, &action.IdempotencyKey, &parameters, &response, &action.Status, &errorText, &action.CreatedAt, &action.UpdatedAt)
 	if err != nil {
 		return action, err

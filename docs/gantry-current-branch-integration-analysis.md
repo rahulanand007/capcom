@@ -2,9 +2,8 @@
 
 ## Snapshot
 
-Pulled local Gantry checkout:
+Reviewed Gantry source checkout:
 
-- Local repo: `C:\Users\caw-dev\Desktop\myclaw`
 - Branch: `main`
 - New head: `42c065a0`
 - Package: `@gantry/runtime@1.2.52`
@@ -141,4 +140,3 @@ Capcom should store:
 | Skills/MCP mutations sync settings as side effect | Treat Gantry as source of truth for actual state after every mutation |
 | Webhooks add delivery complexity | Use polling/streaming first; keep webhooks Phase 2 |
 | Company brain distracts from governance wedge | Track as memory/source inventory, not MVP control action |
-

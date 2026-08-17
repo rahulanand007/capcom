@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
 func upsertRuntimeDiagnostic(ctx context.Context, tx *sql.Tx, runtimeID string, item domain.RuntimeDiagnosticSnapshot) error {
@@ -59,7 +60,7 @@ raw_runtime_json=EXCLUDED.raw_runtime_json,updated_at=now()`, runtimeID, item.Ru
 
 func (r SyncRepository) ListRuntimeDiagnostics(ctx context.Context, runtimeID string) ([]domain.PersistedRuntimeDiagnostic, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,runtime_connection_id,check_id,status,message,observed_at,metadata_json,raw_runtime_json
-FROM runtime_diagnostics WHERE runtime_connection_id=$1 ORDER BY check_id`, runtimeID)
+FROM runtime_diagnostics WHERE runtime_connection_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_diagnostics.runtime_connection_id AND rc.organization_id=$2::uuid)) ORDER BY check_id`, runtimeID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list runtime diagnostics: %w", err)
 	}
@@ -82,7 +83,7 @@ FROM runtime_diagnostics WHERE runtime_connection_id=$1 ORDER BY check_id`, runt
 func (r SyncRepository) ListRuntimeInventory(ctx context.Context, runtimeID, kind string) ([]domain.PersistedRuntimeInventory, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,runtime_connection_id,runtime_item_id,kind,name,status,provider,source,
 observed_at,metadata_json,raw_runtime_json FROM runtime_inventory_items
-WHERE runtime_connection_id=$1 AND ($2='' OR kind=$2) ORDER BY kind,name`, runtimeID, kind)
+WHERE runtime_connection_id=$1 AND ($2='' OR kind=$2) AND ($3='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_inventory_items.runtime_connection_id AND rc.organization_id=$3::uuid)) ORDER BY kind,name`, runtimeID, kind, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list runtime inventory: %w", err)
 	}
@@ -105,7 +106,7 @@ WHERE runtime_connection_id=$1 AND ($2='' OR kind=$2) ORDER BY kind,name`, runti
 func (r SyncRepository) ListRuntimeCapabilities(ctx context.Context, runtimeID string) ([]domain.PersistedRuntimeCapability, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,runtime_connection_id,runtime_capability_id,version,name,category,risk,
 can_description,cannot_description,source,observed_at,metadata_json,raw_runtime_json FROM runtime_capabilities
-WHERE runtime_connection_id=$1 ORDER BY risk,name`, runtimeID)
+WHERE runtime_connection_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=runtime_capabilities.runtime_connection_id AND rc.organization_id=$2::uuid)) ORDER BY risk,name`, runtimeID, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("list runtime capabilities: %w", err)
 	}

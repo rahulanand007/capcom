@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -32,7 +33,7 @@ func (r TelemetryRepository) UpsertObservation(ctx context.Context, observation 
 	var inserted bool
 	err = r.db.QueryRowContext(ctx, `
 INSERT INTO usage_observations (
-    source, source_observation_id, runtime_connection_id, runtime_agent_id,
+    source, source_observation_id, runtime_connection_id, organization_id, runtime_agent_id,
     runtime_execution_id, parent_execution_id, thread_id, model, provider,
     request_count, input_tokens, output_tokens, cached_input_tokens,
     cache_creation_tokens, reasoning_tokens, total_tokens, context_window_tokens,
@@ -40,7 +41,7 @@ INSERT INTO usage_observations (
     duration_ms, time_to_first_token_ms, error_count, started_at, ended_at,
     observed_at, model_metadata_version, attributes_json
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $1, $2, $3, (SELECT organization_id FROM runtime_connections WHERE id=$3 AND ($30='' OR organization_id=$30::uuid)), $4, $5, $6, $7, $8, $9,
     $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
     $22, $23, $24, $25, $26, $27, $28, $29
 )
@@ -82,6 +83,7 @@ RETURNING (xmax = 0)`,
 		observation.OutputCostUSD, observation.TotalCostUSD, observation.DurationMS,
 		observation.TimeToFirstTokenMS, observation.ErrorCount, observation.StartedAt,
 		observation.EndedAt, observation.ObservedAt, observation.ModelMetadataVersion, attributes,
+		tenant.OrganizationID(ctx),
 	).Scan(&inserted)
 	if err != nil {
 		var postgresError *pgconn.PgError
@@ -107,9 +109,9 @@ func (r TelemetryRepository) CreateIngestionRun(ctx context.Context, run domain.
 	run.Status = domain.TelemetryRunRunning
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO telemetry_ingestion_runs (
-    id, runtime_connection_id, source, status, cursor_value, schema_version, started_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		run.ID, run.RuntimeConnectionID, run.Source, run.Status, run.Cursor, run.SchemaVersion, run.StartedAt)
+    id, runtime_connection_id, organization_id, source, status, cursor_value, schema_version, started_at
+) SELECT $1, $2, organization_id, $3, $4, $5, $6, $7 FROM runtime_connections WHERE id=$2 AND ($8='' OR organization_id=$8::uuid)`,
+		run.ID, run.RuntimeConnectionID, run.Source, run.Status, run.Cursor, run.SchemaVersion, run.StartedAt, tenant.OrganizationID(ctx))
 	if err != nil {
 		return run, fmt.Errorf("create telemetry ingestion run: %w", err)
 	}
@@ -132,7 +134,7 @@ UPDATE telemetry_ingestion_runs SET
     last_successful_at = CASE WHEN $2 = 'succeeded' THEN $4 ELSE last_successful_at END,
     records_accepted = $5, records_rejected = $6, records_deduplicated = $7,
     last_error = $8
-WHERE id = $1`, run.ID, run.Status, run.Cursor, finished, run.Accepted, run.Rejected, run.Deduplicated, run.LastError)
+WHERE id = $1 AND ($9='' OR organization_id=$9::uuid)`, run.ID, run.Status, run.Cursor, finished, run.Accepted, run.Rejected, run.Deduplicated, run.LastError, tenant.OrganizationID(ctx))
 	if err != nil {
 		return run, fmt.Errorf("finish telemetry ingestion run: %w", err)
 	}
@@ -146,8 +148,8 @@ SELECT id, runtime_connection_id, source, status, cursor_value, schema_version,
        started_at, finished_at, last_successful_at, records_accepted,
        records_rejected, records_deduplicated, last_error
 FROM telemetry_ingestion_runs
-WHERE runtime_connection_id = $1
-ORDER BY started_at DESC LIMIT 1`, runtimeID).Scan(
+WHERE runtime_connection_id = $1 AND ($2='' OR organization_id=$2::uuid)
+ORDER BY started_at DESC LIMIT 1`, runtimeID, tenant.OrganizationID(ctx)).Scan(
 		&run.ID, &run.RuntimeConnectionID, &run.Source, &run.Status, &run.Cursor,
 		&run.SchemaVersion, &run.StartedAt, &run.FinishedAt, &run.LastSuccessfulAt,
 		&run.Accepted, &run.Rejected, &run.Deduplicated, &run.LastError,
@@ -158,11 +160,11 @@ ORDER BY started_at DESC LIMIT 1`, runtimeID).Scan(
 			fallbackErr := r.db.QueryRowContext(ctx, `
 SELECT runtime_connection_id, source, MAX(observed_at)
 FROM usage_observations
-WHERE runtime_connection_id = $1
+WHERE runtime_connection_id = $1 AND ($2='' OR organization_id=$2::uuid)
 GROUP BY runtime_connection_id, source
 ORDER BY CASE source
     WHEN 'gantry_native' THEN 1 WHEN 'langsmith' THEN 2 WHEN 'otel' THEN 3 ELSE 99 END
-LIMIT 1`, runtimeID).Scan(&run.RuntimeConnectionID, &run.Source, &observedAt)
+LIMIT 1`, runtimeID, tenant.OrganizationID(ctx)).Scan(&run.RuntimeConnectionID, &run.Source, &observedAt)
 			if errors.Is(fallbackErr, sql.ErrNoRows) {
 				return run, nil
 			}
@@ -196,7 +198,8 @@ func (r TelemetryRepository) Summary(ctx context.Context, query domain.UsageQuer
 	err := r.db.QueryRowContext(ctx, `
 WITH scoped AS (
     SELECT u.*
-    FROM usage_observations u
+FROM usage_observations u
+    JOIN runtime_connections rc ON rc.id=u.runtime_connection_id
     LEFT JOIN agent_runtime_bindings b
       ON b.runtime_connection_id = u.runtime_connection_id
      AND b.runtime_agent_id = u.runtime_agent_id
@@ -205,6 +208,7 @@ WITH scoped AS (
       AND ($4 = '' OR b.agent_id::text = $4)
       AND ($5 = '' OR u.model = $5)
       AND ($6 = '' OR u.runtime_execution_id = $6)
+      AND ($8 = '' OR rc.organization_id=$8::uuid)
 ), selected_sources AS (
     SELECT runtime_connection_id, COALESCE(NULLIF($7, ''), (
         array_agg(source ORDER BY CASE source
@@ -237,7 +241,7 @@ JOIN selected_sources chosen
   ON chosen.runtime_connection_id = s.runtime_connection_id
  AND chosen.source = s.source`,
 		query.From, query.To, query.RuntimeConnectionID, query.AgentID, query.Model,
-		query.RuntimeExecutionID, query.Source,
+		query.RuntimeExecutionID, query.Source, tenant.OrganizationID(ctx),
 	).Scan(
 		&source, &summary.RequestCount, &summary.InputTokens, &summary.OutputTokens,
 		&summary.CachedInputTokens, &summary.CacheCreationTokens, &summary.ReasoningTokens,
@@ -299,7 +303,8 @@ SELECT EXISTS (
           SELECT runtime_connection_id FROM agent_runtime_bindings WHERE agent_id::text = $2
       ))
       AND ($3 = '' OR t.source = $3)
-)`, query.RuntimeConnectionID, query.AgentID, query.Source).Scan(&configured)
+      AND ($4 = '' OR EXISTS(SELECT 1 FROM runtime_connections rc WHERE rc.id=t.runtime_connection_id AND rc.organization_id=$4::uuid))
+)`, query.RuntimeConnectionID, query.AgentID, query.Source, tenant.OrganizationID(ctx)).Scan(&configured)
 	if err != nil {
 		return false, fmt.Errorf("check telemetry configuration: %w", err)
 	}
@@ -310,6 +315,7 @@ func (r TelemetryRepository) modelBreakdown(ctx context.Context, query domain.Us
 	rows, err := r.db.QueryContext(ctx, `
 WITH scoped AS (
     SELECT u.* FROM usage_observations u
+    JOIN runtime_connections rc ON rc.id=u.runtime_connection_id
     LEFT JOIN agent_runtime_bindings b
       ON b.runtime_connection_id = u.runtime_connection_id AND b.runtime_agent_id = u.runtime_agent_id
     WHERE u.observed_at >= $1 AND u.observed_at < $2
@@ -317,6 +323,7 @@ WITH scoped AS (
       AND ($4 = '' OR b.agent_id::text = $4)
       AND ($5 = '' OR u.model = $5)
       AND ($6 = '' OR u.runtime_execution_id = $6)
+      AND ($8 = '' OR rc.organization_id=$8::uuid)
 ), selected_sources AS (
     SELECT runtime_connection_id, COALESCE(NULLIF($7, ''), (
         array_agg(source ORDER BY CASE source
@@ -330,7 +337,7 @@ FROM scoped s JOIN selected_sources chosen
 GROUP BY s.model
 ORDER BY SUM(s.total_tokens) DESC, s.model
 LIMIT 50`, query.From, query.To, query.RuntimeConnectionID, query.AgentID, query.Model,
-		query.RuntimeExecutionID, query.Source)
+		query.RuntimeExecutionID, query.Source, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("summarize telemetry by model: %w", err)
 	}
@@ -351,6 +358,7 @@ func (r TelemetryRepository) timeSeries(ctx context.Context, query domain.UsageQ
 	rows, err := r.db.QueryContext(ctx, `
 WITH scoped AS (
     SELECT u.* FROM usage_observations u
+    JOIN runtime_connections rc ON rc.id=u.runtime_connection_id
     LEFT JOIN agent_runtime_bindings b
       ON b.runtime_connection_id = u.runtime_connection_id AND b.runtime_agent_id = u.runtime_agent_id
     WHERE u.observed_at >= $1 AND u.observed_at < $2
@@ -358,6 +366,7 @@ WITH scoped AS (
       AND ($4 = '' OR b.agent_id::text = $4)
       AND ($5 = '' OR u.model = $5)
       AND ($6 = '' OR u.runtime_execution_id = $6)
+      AND ($9 = '' OR rc.organization_id=$9::uuid)
 ), selected_sources AS (
     SELECT runtime_connection_id, COALESCE(NULLIF($7, ''), (
         array_agg(source ORDER BY CASE source
@@ -371,7 +380,7 @@ FROM scoped s JOIN selected_sources chosen
   ON chosen.runtime_connection_id = s.runtime_connection_id AND chosen.source = s.source
 GROUP BY 1
 ORDER BY 1`, query.From, query.To, query.RuntimeConnectionID, query.AgentID, query.Model,
-		query.RuntimeExecutionID, query.Source, interval)
+		query.RuntimeExecutionID, query.Source, interval, tenant.OrganizationID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("summarize telemetry time series: %w", err)
 	}

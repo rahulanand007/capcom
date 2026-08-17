@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -13,6 +14,37 @@ type publicErrorDetail struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
+}
+
+// writeAPIError is the single response boundary for handler and middleware
+// failures. Technical details remain internal; clients only receive the stable,
+// user-readable public envelope.
+func writeAPIError(w http.ResponseWriter, status int, err error) {
+	writeAPIErrorWith(w, status, err, nil)
+}
+
+func writeAPIErrorWith(w http.ResponseWriter, status int, err error, fields map[string]any) {
+	technical := ""
+	if err != nil {
+		technical = err.Error()
+	}
+	response := publicError(status, technical)
+	if status >= http.StatusInternalServerError {
+		// Do not log err.Error() here: adapter response bodies can contain
+		// credentials or customer data. Source services may emit separately
+		// redacted diagnostics with request correlation.
+		slog.Default().Warn("api request failed", "status", status, "public_code", response.Error.Code)
+	}
+	if len(fields) == 0 {
+		writeJSON(w, status, response)
+		return
+	}
+	payload := make(map[string]any, len(fields)+1)
+	payload["error"] = response.Error
+	for key, value := range fields {
+		payload[key] = value
+	}
+	writeJSON(w, status, payload)
 }
 
 func publicError(status int, technical string) publicErrorResponse {
@@ -67,7 +99,7 @@ func publicErrorForStatus(status int) publicErrorDetail {
 	case http.StatusUnauthorized:
 		return publicErrorDetail{
 			Code:    "UNAUTHORIZED",
-			Message: "The console is not authorized. Refresh the page or check the admin token.",
+			Message: "Your session is missing or has expired. Sign in and try again.",
 		}
 	case http.StatusForbidden:
 		return publicErrorDetail{

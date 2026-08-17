@@ -68,6 +68,8 @@ type SecretConfig struct {
 type SecurityConfig struct {
 	AdminToken     string
 	AllowedOrigins []string
+	SecureCookies  bool
+	DeploymentMode string
 }
 
 type HTTPConfig struct {
@@ -166,6 +168,21 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	secureCookies, err := boolEnv(lookup, "CAPCOM_SECURE_COOKIES", true)
+	if err != nil {
+		return Config{}, err
+	}
+	deploymentMode := strings.ToLower(stringEnv(lookup, "CAPCOM_DEPLOYMENT_MODE", "local"))
+	if deploymentMode != "local" && deploymentMode != "hosted" {
+		return Config{}, fmt.Errorf("CAPCOM_DEPLOYMENT_MODE must be local or hosted")
+	}
+	adminToken := stringEnv(lookup, "CAPCOM_ADMIN_TOKEN", "")
+	if deploymentMode == "hosted" && adminToken != "" {
+		return Config{}, fmt.Errorf("CAPCOM_ADMIN_TOKEN must be unset in hosted mode")
+	}
+	if deploymentMode == "hosted" && !secureCookies {
+		return Config{}, fmt.Errorf("CAPCOM_SECURE_COOKIES must be true in hosted mode")
+	}
 
 	return Config{
 		HTTP: HTTPConfig{
@@ -181,8 +198,10 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		},
 		Secrets: SecretConfig{Key: secretKey},
 		Security: SecurityConfig{
-			AdminToken:     stringEnv(lookup, "CAPCOM_ADMIN_TOKEN", ""),
+			AdminToken:     adminToken,
 			AllowedOrigins: stringListEnv(lookup, "CAPCOM_CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
+			SecureCookies:  secureCookies,
+			DeploymentMode: deploymentMode,
 		},
 		Service: ServiceConfig{
 			Version: stringEnv(lookup, "CAPCOM_SERVICE_VERSION", defaultServiceVersion),

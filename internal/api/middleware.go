@@ -3,36 +3,95 @@ package api
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
-func adminAuth(next http.Handler, token string) http.Handler {
+func sessionAuth(next http.Handler, token string, auth AuthService) http.Handler {
 	expected := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+		if isPublicPath(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if token == "" {
-			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "admin_auth_not_configured"})
-			return
-		}
 		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
-			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		if token != "" && strings.HasPrefix(header, "Bearer ") {
+			providedToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+			provided := sha256.Sum256([]byte(providedToken))
+			if providedToken != "" && subtle.ConstantTimeCompare(expected[:], provided[:]) == 1 {
+				ctx := tenant.WithPrincipal(r.Context(), domain.Principal{PlatformAdmin: true, Role: "platform_admin"})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+		if auth == nil {
+			writeAPIError(w, http.StatusUnauthorized, errors.New("session authentication is not configured"))
 			return
 		}
-		providedToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-		provided := sha256.Sum256([]byte(providedToken))
-		if providedToken == "" || subtle.ConstantTimeCompare(expected[:], provided[:]) != 1 {
-			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil {
+			writeAPIError(w, http.StatusUnauthorized, errors.New("session required"))
 			return
 		}
-		next.ServeHTTP(w, r)
+		principal, err := auth.Authenticate(r.Context(), cookie.Value)
+		if err != nil {
+			http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, MaxAge: -1, Expires: time.Unix(1, 0), SameSite: http.SameSiteLaxMode})
+			http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(1, 0), SameSite: http.SameSiteLaxMode})
+			writeAPIError(w, http.StatusUnauthorized, err)
+			return
+		}
+		if !authorizedForRequest(principal, r) {
+			writeAPIError(w, http.StatusForbidden, errors.New("role does not allow this action"))
+			return
+		}
+		if requiresCSRF(r.Method) {
+			if err := auth.VerifyCSRF(principal, r.Header.Get("X-CSRF-Token")); err != nil {
+				writeAPIError(w, http.StatusForbidden, err)
+				return
+			}
+		}
+		w.Header().Set("Cache-Control", "private, no-store")
+		next.ServeHTTP(w, r.WithContext(tenant.WithPrincipal(r.Context(), principal)))
 	})
+}
+
+func isPublicPath(r *http.Request) bool {
+	return r.URL.Path == "/healthz" || r.URL.Path == "/" ||
+		(r.Method == http.MethodPost && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/signup"))
+}
+
+func requiresCSRF(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+}
+
+func authorizedForRequest(principal domain.Principal, r *http.Request) bool {
+	if r.URL.Path == "/auth/logout" {
+		return true
+	}
+	if principal.PlatformAdmin || principal.Role == "owner" || principal.Role == "admin" {
+		return true
+	}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	if principal.Role != "operator" {
+		return false
+	}
+	// Operators may execute runtime actions, but they cannot manage credentials,
+	// connection ownership, or organization configuration.
+	if strings.HasPrefix(r.URL.Path, "/v1/secrets") {
+		return false
+	}
+	if strings.HasPrefix(r.URL.Path, "/v1/runtime-connections") || strings.HasPrefix(r.URL.Path, "/v1/runtime-instances") {
+		return strings.HasSuffix(r.URL.Path, "/sync") || strings.HasSuffix(r.URL.Path, "/test")
+	}
+	return true
 }
 
 // corsMiddleware answers CORS preflight requests and adds the allow-origin
@@ -53,7 +112,8 @@ func corsMiddleware(next http.Handler, allowedOrigins []string) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Add("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
 		}
@@ -72,9 +132,8 @@ func recoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 				logger.Error("panic recovered",
 					"method", r.Method,
 					"path", r.URL.Path,
-					"panic", recovered,
 				)
-				writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "panic"})
+				writeAPIError(w, http.StatusInternalServerError, errors.New("panic recovered"))
 			}
 		}()
 		next.ServeHTTP(w, r)

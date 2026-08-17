@@ -29,7 +29,7 @@ Already implemented:
 - Gantry health, agent, hierarchy, access, and current-skill reads
 - runtime-neutral adapter snapshots
 - live diagnostic endpoints under `/v1/runtime-connections/{id}/agents`
-- an embedded console that can inspect live agent details and skills
+- a separate Next.js console that inspects live and persisted agent state through authenticated APIs
 
 Missing from the durable loop:
 

@@ -56,6 +56,14 @@ async function request<T>(path: string, options: RequestOptions = {}) {
     headers.set("Content-Type", "application/json")
   }
 
+  if (options.method && !["GET", "HEAD", "OPTIONS"].includes(options.method)) {
+    const csrf = document.cookie
+      .split("; ")
+      .find((value) => value.startsWith("capcom_csrf="))
+      ?.split("=")[1]
+    if (csrf) headers.set("X-CSRF-Token", decodeURIComponent(csrf))
+  }
+
   const response = await fetch(url, {
     ...options,
     headers,
@@ -69,6 +77,9 @@ async function request<T>(path: string, options: RequestOptions = {}) {
     : await response.text()
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      window.location.assign("/login?expired=1")
+    }
     throw new ApiError(errorMessage(data, response.statusText), response.status, data)
   }
 
@@ -84,6 +95,7 @@ function errorMessage(data: unknown, fallback: string) {
   ) {
     return data.error
   }
+
   if (
     data &&
     typeof data === "object" &&
@@ -116,6 +128,12 @@ const METRICS_RANGES = {
 } as const
 
 export const capcomApi = {
+  signup: (email: string, password: string) =>
+    request<AuthResponse>("/auth/signup", { method: "POST", body: { email, password } }),
+  login: (email: string, password: string) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body: { email, password } }),
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+  me: () => request<AuthResponse>("/v1/me"),
   health: () => request<HealthResponse>("/healthz"),
   createSecret: (body: CreateSecretRequest) =>
     request("/v1/secrets", {
@@ -243,6 +261,12 @@ export const capcomApi = {
       method: "POST",
       body,
     }),
+}
+
+export type AuthResponse = {
+  user: { id: string; email: string }
+  organization: { id: string; name: string; slug: string }
+  role: string
 }
 
 function metricsURL(path: string, range: keyof typeof METRICS_RANGES) {

@@ -25,7 +25,7 @@ func writeAgentDelegations(w http.ResponseWriter, r *http.Request, cfg RouterCon
 	}
 	items, err := cfg.RuntimeSync.ListAgentDelegations(r.Context(), runtimeID, agentID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(items))

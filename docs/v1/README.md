@@ -69,3 +69,11 @@ The product is not an observability dashboard or a new agent runtime. Gantry run
 - Gantry outage marks runtime degraded and preserves last known state.
 - Gantry and instrumented LangGraph usage is queryable per agent without double counting overlapping polls.
 - Uninstrumented runtimes report telemetry as not configured rather than zero.
+
+## Explicit Post-V1 Work
+
+Multi-user hosting is not part of the V1 contract. The implementation plan for
+email/password authentication, secure sessions, organizations, tenant isolation,
+authorization, managed per-tenant secrets, safe egress, quotas, privacy lifecycle
+controls, and the outbound runtime connector is maintained in
+[Hosted Product Foundation](../post-v1/01-hosted-product-foundation.md).

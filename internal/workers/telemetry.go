@@ -8,6 +8,7 @@ import (
 
 	runtimeadapter "capcom/internal/adapters/runtime"
 	"capcom/internal/domain"
+	"capcom/internal/tenant"
 )
 
 const telemetrySchemaVersion = "usage-v1"
@@ -102,6 +103,7 @@ func (w *TelemetryWorker) collectAll(ctx context.Context) {
 }
 
 func (w *TelemetryWorker) collectOne(ctx context.Context, conn domain.RuntimeConnection, reader runtimeadapter.UsageReader) {
+	ctx = tenant.WithPrincipal(ctx, domain.Principal{OrganizationID: conn.OrganizationID, Organization: domain.Organization{ID: conn.OrganizationID}, Role: "system"})
 	now := time.Now().UTC()
 	to := now.Truncate(w.window)
 	from := to.Add(-w.window - w.overlap)
